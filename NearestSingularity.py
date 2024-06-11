@@ -4,27 +4,25 @@ import numpy as np
 from tqdm import tqdm
 from DAFunctions import load_off_file, compute_areas_normals, compute_laplacian, compute_mean_curvature_normal, compute_edge_list, compute_angle_defect
 
+
 if __name__ == '__main__':
     ps.init()
 
     vertices, faces = load_off_file(os.path.join('data', 'lion-head.off'))
-    
-    print(vertices.shape, faces.shape)
-    print(max(faces.flatten()), min(faces.flatten()))
-    raise ValueError
 
     ps_mesh = ps.register_surface_mesh("Input Mesh", vertices, faces)
 
     halfedges, edges, edgeBoundMask, boundVertices, EH, EF = compute_edge_list(vertices, faces)
 
     L, vorAreas, _,_ = compute_laplacian(vertices, faces, edges, edgeBoundMask, EF)
-    faceNormals, faceAreas = compute_areas_normals(vertices, faces)
-    MCNormals, MC, vertexNormals = compute_mean_curvature_normal(vertices, faces, faceNormals, L, vorAreas)
+    # faceNormals, faceAreas = compute_areas_normals(vertices, faces)
+    # MCNormals, MC, vertexNormals = compute_mean_curvature_normal(vertices, faces, faceNormals, L, vorAreas)
 
     angleDefect = compute_angle_defect(vertices, faces, boundVertices)
     
-    minPrincipal, maxPrincipal, minDirection, maxDirection = compute_principal_curvature_direction(vertices, edges, vertexNormals)
     GC = angleDefect / vorAreas
+    
+    
 
     # add a scalar function on the grid
     # ps_mesh.add_scalar_quantity("Gaussian Curvature", GC)
