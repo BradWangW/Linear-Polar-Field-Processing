@@ -10,7 +10,7 @@ if __name__ == '__main__':
 
     vertices, faces = load_off_file(os.path.join('data', 'lion-head.off'))
 
-    ps_mesh = ps.register_surface_mesh("Input Mesh", vertices, faces)
+    # ps_mesh = ps.register_surface_mesh("Input Mesh", vertices, faces)
 
     halfedges, edges, edgeBoundMask, boundVertices, EH, EF = compute_edge_list(vertices, faces)
 

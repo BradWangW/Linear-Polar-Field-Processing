@@ -1,10 +1,13 @@
 import numpy as np
 import scipy.linalg
+import polyscope as ps
 from scipy.sparse import lil_matrix, csr_matrix, csc_matrix, coo_matrix, linalg, bmat, diags
 from scipy.sparse.linalg import spsolve, splu, lsqr
 from tqdm import tqdm
 import os
 from contextlib import redirect_stdout, redirect_stderr
+from DAFunctions import load_off_file, compute_areas_normals, compute_laplacian, compute_mean_curvature_normal, compute_edge_list, compute_angle_defect
+from scipy.optimize import minimize
 
 
 def compute_planes_F(V, F):
@@ -14,8 +17,8 @@ def compute_planes_F(V, F):
             V: (N, 3) array of vertices
             F: (M, 3) array of faces
         Output:
-            U: (M, 3) array of the first basis vector of each face
-            V: (M, 3) array of the second basis vector of each face
+            B1: (M, 3) array of the first basis vector of each face
+            B2: (M, 3) array of the second basis vector of each face
             normals: (M, 3) array of the normal vector of each face
     '''
     V1 = V[F[:, 0]]
@@ -23,26 +26,26 @@ def compute_planes_F(V, F):
     V3 = V[F[:, 2]]
     
     # Two basis vectors of the plane
-    U = V2 - V1
-    V = V3 - V1
+    B1 = V2 - V1
+    B2 = V3 - V1
     
     # Check parallelism
-    para = np.all(np.cross(U, V) == 0, axis=1)
+    para = np.all(np.cross(B1, B2) == 0, axis=1)
     if np.any(para):
         raise ValueError(f'The face(s) {F[np.where(para)]} is degenerate.')
     
     # Normal vector of the plane
-    normals = np.cross(V2 - V1, V3 - V1)
+    normals = np.cross(B1, B2)
     normals = normals / np.linalg.norm(normals, axis=1)[:, None]
     
-    return U, V, normals
+    return B1, B2, normals
 
-def compute_projection(U, V, normals, posis):
+def compute_projection(B1, B2, normals, posis):
     '''
     Compuite the projection of a point onto the planes defined by the basis vectors and the normals.
         Input:
-            U: (M, 3) array of the first basis vector of each face
-            V: (M, 3) array of the second basis vector of each face
+            B1: (M, 3) array of the first basis vector of each face
+            B2: (M, 3) array of the second basis vector of each face
             normals: (M, 3) array of the normal vector of each face
             posis: (N, 3) array of the points to be projected
         Output:
@@ -53,8 +56,8 @@ def compute_projection(U, V, normals, posis):
     
     posis_plane = posis - posis_normal
     
-    X = np.dot(U, posis_plane.T)
-    Y = np.dot(V, posis_plane.T)
+    X = np.dot(B1, posis_plane.T)
+    Y = np.dot(B2, posis_plane.T)
     
     return X + 1j * Y
 
@@ -129,6 +132,11 @@ def extended_mesh(V, E, F):
         
         faces = np.array(F_f)[neighbours]
         v2s = np.mean(np.array(V_extended)[faces], axis=1)
+        
+        # Avoid division by zero
+        while np.any(np.linalg.norm(v2s, axis=1) == 0) or np.linalg.norm(v1) == 0:
+            v1 += 1e-6
+            v2s += 1e-6
         
         angles = np.arccos(np.sum(v1 * v2s, axis=1) / (np.linalg.norm(v1) * np.linalg.norm(v2s, axis=1)))
         
@@ -206,7 +214,7 @@ def is_in_face(V, F, posi):
     _, _, normals = compute_planes_F(V, F)
     
     # Filter the faces whose plane the point is in
-    is_in_plane = np.where(np.dot(normals, (posi - V[F[:, 0]]).T) == 0)[0]
+    is_in_plane = np.where(np.sum(normals * (posi - V[F[:, 0]]), axis=1) == 0)[0]
     
     if len(is_in_plane) == 0:
         return False
@@ -233,9 +241,9 @@ def is_in_face(V, F, posi):
             
             if np.all(x > 0) and np.sum(x) < 1:
                 candidate_faces.append(i)
-                
+        
         if len(candidate_faces) == 1:
-            return candidate_faces[0]
+            return candidate_faces
         elif len(candidate_faces) > 1:
             raise ValueError('The point is in more than one face.')
         else:
@@ -243,8 +251,6 @@ def is_in_face(V, F, posi):
 
 
 def compute_thetas(VEF_extended, singularities, indices, G_V):
-    
-    thetas = {}
     
     V_extended, E_twin, E_comb, F_f, F_e, F_v = VEF_extended
     
@@ -257,7 +263,6 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
     
     G_F_full = np.zeros(num_F)
     G_F_full[-len(F_v):] = G_V
-    G_F_full = csr_matrix(G_F_full)
     
     I_F_e = np.zeros(len(F_e))
     I_F_v = np.zeros(len(F_v))
@@ -274,76 +279,127 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
             I_F_v[np.where(in_F_v)[0]] = index
             continue
         else:
-            if is_in_face(V_extended, F_f, singularity):
-                F_singular.append((is_in_face(V_extended, F_f, singularity), singularity, index))
+            candidate_faces = is_in_face(V_extended, F_f, singularity)
+            
+            if candidate_faces:
+                F_singular.append((candidate_faces[0], singularity, index))
             else:
                 raise ValueError(f'The singularity {singularity} is not in any face.')
     
-    I_F_full = csr_matrix(np.concatenate([np.zeros(len(F_f)), I_F_e, I_F_v]))
+    I_F_full = np.concatenate([np.zeros(len(F_f)), I_F_e, I_F_v])
+    
     
     # Compute the sets of thetas for each face singularity
-    for i, f_singular, singularity, index in enumerate(F_singular):
-        thetas[f'Field {i}'] = np.zeros(num_E)
-        
+    Thetas = np.zeros((num_E, len(F_singular)))
+    constraints = []
+    mask_removed_E = np.ones((num_E, len(F_singular)), dtype=bool)
+    for i, (f_singular, singularity, index) in enumerate(F_singular):
         # Compute the thetas for the singular face
         e_f = np.all(np.isin(E_extended, F_f[f_singular]), axis=1)
         
-        U, V, normals = compute_planes_F(V_extended, F_f[f_singular])
+        B1, B2, normals = compute_planes_F(V_extended, F_f[f_singular][None, :])
 
-        Z1 = singularity - V_extended[E_extended[e_f, 0]]
-        Z2 = singularity - V_extended[E_extended[e_f, 1]]
+        V1 = singularity - V_extended[E_extended[e_f, 0]]
+        V2 = singularity - V_extended[E_extended[e_f, 1]]
         
-        Z1_proj = compute_projection(U, V, normals, Z1)
-        Z2_proj = compute_projection(U, V, normals, Z2)
+        Z1 = compute_projection(B1, B2, normals, V1)
+        Z2 = compute_projection(B1, B2, normals, V2)
         
-        thetas[f'Field {i}'][e_f] = index * np.arccos(
-            (Z1 * np.conjugate(Z2)) / 
-            (np.linalg.norm(Z1) * np.linalg.norm(Z2))
-        )
+        Thetas[e_f, i] = index * np.arccos(
+            ((Z1 * np.conjugate(Z2)) / 
+            (np.linalg.norm(Z1) * np.linalg.norm(Z2))).real
+        )[0]
         
-        # Compute the thetas anywhere else
+        # Add constraints (trivial connection)
         mask_removed_f = np.ones(num_F, dtype=bool)
         mask_removed_f[f_singular] = False
         
-        mask_removed_e = np.ones(len(F_e), dtype=bool)
-        mask_removed_e[e_f] = False
+        mask_removed_E[e_f, i] = False
         
         d1 = d1_full[mask_removed_f]
-        d1 = d1[:, mask_removed_e]
-        lhs = d1.tocoo()
+        d1 = d1[:, mask_removed_E[:, i]]
+        # lhs = d1.tocoo()
         
         G_F = G_F_full[mask_removed_f]
         I_F = I_F_full[mask_removed_f]
-        rhs = coo_matrix(G_F - 2 * np.pi * I_F)
+        rhs = - G_F + 2 * np.pi * I_F
         
-        thetas[f'Field {i}'][mask_removed_e] = lsqr(lhs, rhs)[0]
-        
-        
-            
-        
+        constraints.append({
+            'type': 'eq', 'fun': lambda x, i=i: d1.dot(x[i*(num_E-3):(i+1)*(num_E-3)]) - rhs
+            })
 
-
-
+        # thetas[f'Singularity {singularity}'][mask_removed_E[:, i]] = lsqr(lhs, rhs)[0]
         
-        
-        
+    # Compute the thetas for the rest of the faces
+    def objective(thetas):
+        # Return ||sum_i thetas_i||^2
+        return np.linalg.norm(np.sum(thetas.reshape(num_E-3, -1), axis=0))**2
     
+    thetas_init = np.random.rand((num_E-3) * len(F_singular))
+    
+    result = minimize(objective, thetas_init, constraints=constraints)
+    
+    Thetas[mask_removed_E] = result.x
+    
+    thetas = np.sum(Thetas, axis=1)
+        
+    return thetas
+        
+
+def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas):
+    V_extended, E_twin, E_comb, _, _, _ = VEF_extended
+    
+    E_extended = np.concatenate([E_twin, E_comb])
+    
+    A = np.zeros((len(E_extended) + 1, len(V_extended)), dtype=complex)
+    A[np.arange(len(E_extended)), E_extended[:, 0]] = np.exp(1j * thetas)
+    A[np.arange(len(E_extended)), E_extended[:, 1]] = -1
+    A[-1, v_init] = 1
+    
+    b = np.zeros(len(E_extended) + 1, dtype=complex)
+    b[-1] = z_init
+    
+    Z = np.linalg.lstsq(A, b, rcond=None)[0]
+    
+    return Z
+
 
 
 V = np.array([
-    [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]
-])
+    [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 0, 1]
+], dtype=float)
 E = np.array([[0, 1], [1, 2], [2, 3], [3, 0], [0, 2], [1, 3]])
 F = np.array([[0, 1, 2], [2, 3, 0], [0, 1, 3], [1, 2, 3]])
-singularities = [[1, 0, 0]]
-indices = [1]
+singularities = np.array([[0.8, 0.2, 0], [0.9, 0.1, 0]])
+indices = [1, -1]
 
-compute_planes_F(V, F)
+halfedges, E, edgeBoundMask, boundVertices, EH, EF = compute_edge_list(V, F)
 
-V_extended, E_twin, E_comb, F_f, F_e, F_v = extended_mesh(V, E, F)
+_, vorAreas, _,_ = compute_laplacian(V, F, E, edgeBoundMask, EF, onlyArea=True)
+
+angleDefect = compute_angle_defect(V, F, boundVertices)
+
+G_V = angleDefect / vorAreas
+
+VEF_extended = extended_mesh(V, E, F)
 # print(V_extended, '\n', E_twin, '\n', E_comb, '\n', F_f, '\n', F_e, '\n', F_v)
 # print(len(V_extended), len(E_twin), len(E_comb), len(F_f), len(F_e), len(F_v))
 
-thetas = compute_twin_edges(V_extended, E_twin, [np.array([1, 0, 0])], [1], 1)
-print(thetas.shape)
+thetas = compute_thetas(VEF_extended, singularities, indices, G_V)
+
+# print(thetas)
+
+Z = reconstruct_corners_from_thetas(0, 1j+1, VEF_extended, thetas)
+
+print(Z)
+
+# if __name__ == '__main__':
+
+#     ps.init()
+
+#     ps_mesh = ps.register_surface_mesh("Input Mesh", V, F)
+    
+#     ps.register_point_cloud("singularity marker", singularities, enabled=True)
+
+#     ps.show()
             
