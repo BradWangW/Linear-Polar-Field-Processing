@@ -40,26 +40,71 @@ def compute_planes_F(V, F):
     
     return B1, B2, normals
 
-def compute_projection(B1, B2, normals, posis):
+
+def complex_projection(B1, B2, normals, posis, diagonal=False):
     '''
-    Compuite the projection of a point onto the planes defined by the basis vectors and the normals.
+    Compuite the complex-represented projection of a point 
+    onto the planes defined by the basis vectors and the normals.
         Input:
             B1: (M, 3) array of the first basis vector of each face
             B2: (M, 3) array of the second basis vector of each face
             normals: (M, 3) array of the normal vector of each face
-            posis: (N, 3) array of the points to be projected
+            posi: (N, 3) array of the points to be projected
         Output:
-            X: (M, N) array of the x-coordinates of the projected points
-            Y: (M, N) array of the y-coordinates of the projected points
+            X: (M, N, 3) array of the x-coordinates of the projected points
+            Y: (M, N, 3) array of the y-coordinates of the projected points
     '''
-    posis_normal = np.dot(normals, posis.T) * normals.T
+    if diagonal:
+        Z = []
+        if B1.shape[0] == posis.shape[0]:
+            for i, posi in enumerate(posis):
+                posi_normal = np.dot(normals[i], posi) * normals[i]
+                
+                posi_plane = posi - posi_normal
+                
+                X = np.sum(B1[i] * posi_plane)
+                Y = np.sum(B2[i] * posi_plane)
+                
+                Z.append(X + 1j * Y)
+                
+            return np.array(Z)
+        else:
+            raise ValueError('When diagonal is True, the number of faces must be equal to the number of points.')
+
+    else:
+        X = np.zeros((len(B1), len(posis)))
+        Y = np.zeros((len(B1), len(posis)))
+        
+        for i, posi in enumerate(posis):
+            posi_normal = np.dot(normals, posi)[:, np.newaxis] * normals
+            
+            posi_plane = posi[np.newaxis, :] - posi_normal
+            
+            X[:, i] = np.sum(B1 * posi_plane, axis=1)
+            Y[:, i] = np.sum(B2 * posi_plane, axis=1)
+            
+        Z = X + 1j * Y
+            
+        return Z
+
+
+def obtain_E(F):
+    E = np.concatenate([
+        F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]
+    ])
+    E = np.unique(np.sort(E, axis=1), axis=0)
     
-    posis_plane = posis - posis_normal
-    
-    X = np.dot(B1, posis_plane.T)
-    Y = np.dot(B2, posis_plane.T)
-    
-    return X + 1j * Y
+    return E
+
+
+def compute_G_V(V, E, F):
+    _, E, edgeBoundMask, boundVertices, _, EF = compute_edge_list(V, F)
+
+    vorAreas = compute_laplacian(V, F, E, edgeBoundMask, EF, onlyArea=True)
+
+    angleDefect = compute_angle_defect(V, F, boundVertices)
+
+    return angleDefect / vorAreas
 
 
 def extended_mesh(V, E, F):
@@ -79,7 +124,7 @@ def extended_mesh(V, E, F):
     V_map = {v:[] for v in range(V.shape[0])}
     
     # Face-faces and twin edges
-    for f in F:
+    for f in tqdm(F, desc='Constructing extended mesh 1/3'):
         f_f = []
         
         for v in f:
@@ -99,7 +144,7 @@ def extended_mesh(V, E, F):
         F_f.append(f_f)
             
     # Edge-faces
-    for e in E:
+    for e in tqdm(E, desc='Constructing extended mesh 2/3'):
         extended_indices_v1 = V_map[e[0]]
         extended_indices_v2 = V_map[e[1]]
         
@@ -128,10 +173,10 @@ def extended_mesh(V, E, F):
         '''
         Sort the neighbour triangles of a vertex in counter-clockwise order.
         '''
-        v1 = V[v]
+        v1 = V[v].copy()
         
         faces = np.array(F_f)[neighbours]
-        v2s = np.mean(np.array(V_extended)[faces], axis=1)
+        v2s = np.mean(np.array(V_extended)[faces], axis=1).copy()
         
         # Avoid division by zero
         while np.any(np.linalg.norm(v2s, axis=1) == 0) or np.linalg.norm(v1) == 0:
@@ -154,7 +199,7 @@ def extended_mesh(V, E, F):
         return order
     
     # Vertex-faces and combinatorial edges
-    for v, extended_indices in V_map.items():
+    for v, extended_indices in tqdm(V_map.items(), desc='Constructing extended mesh 3/3'):
         # Since each extended_vertex belongs to only one face-face, 
         # and they are added to the extended sets in the same order,
         # the counter-clockwise order of the face-faces is preserved for extended_indices.
@@ -186,7 +231,7 @@ def construct_d1(E_twin, E_comb, F_f, F_e, F_v):
     d1 = lil_matrix((len(F_f) + len(F_e) + len(F_v), len(E)))
     
     # Supposing the faces are counter-clockwise oriented,
-    for i, f in enumerate(F_f.tolist() + F_e.tolist() + F_v):
+    for i, f in tqdm(enumerate(F_f.tolist() + F_e.tolist() + F_v), desc='Constructing d1', total=len(F_f) + len(F_e) + len(F_v)):
         for j, e in enumerate(E):
             if e[0] in f and e[1] in f:
                 if e[0] == f[0]:
@@ -214,10 +259,11 @@ def is_in_face(V, F, posi):
     _, _, normals = compute_planes_F(V, F)
     
     # Filter the faces whose plane the point is in
-    is_in_plane = np.where(np.sum(normals * (posi - V[F[:, 0]]), axis=1) == 0)[0]
+    is_in_plane = np.where(np.abs(np.sum(normals * (posi[np.newaxis, :] - V[F[:, 0]]), axis=1)) < 1e-15)[0]
     
     if len(is_in_plane) == 0:
-        return False
+        print(np.min(np.abs(np.sum(normals * (posi[np.newaxis, :] - V[F[:, 0]]), axis=1))))
+        raise ValueError(f'The point {posi} is not in any plane.')
     else:
         # Check if the point is in the triangle
         candidate_faces = []
@@ -227,27 +273,30 @@ def is_in_face(V, F, posi):
             v2 = V[f[1]]
             v3 = V[f[2]]
             
-            # Compute the barycentric coordinates
-            A = np.array([
-                [v1[0] - v3[0], v2[0] - v3[0]],
-                [v1[1] - v3[1], v2[1] - v3[1]]
-            ])
-            b = np.array([
-                posi[0] - v3[0],
-                posi[1] - v3[1]
-            ])
+            v2v1 = v2 - v1
+            v3v1 = v3 - v1
+            posi_v1 = posi - v1
             
-            x = np.linalg.solve(A, b)
+            dot00 = np.dot(v3v1, v3v1)
+            dot01 = np.dot(v3v1, v2v1)
+            dot02 = np.dot(v3v1, posi_v1)
+            dot11 = np.dot(v2v1, v2v1)
+            dot12 = np.dot(v2v1, posi_v1)
             
-            if np.all(x > 0) and np.sum(x) < 1:
+            inv_denom = dot00 * dot11 - dot01 * dot01
+            
+            u = (dot11 * dot02 - dot01 * dot12) / inv_denom
+            v = (dot00 * dot12 - dot01 * dot02) / inv_denom
+            
+            if (u >= 0) and (v >= 0) and (u + v <= 1):
                 candidate_faces.append(i)
         
         if len(candidate_faces) == 1:
             return candidate_faces
         elif len(candidate_faces) > 1:
-            raise ValueError('The point is in more than one face.')
+            raise ValueError(f'The point {posi} is in more than one face.')
         else:
-            return False
+            raise ValueError(f'The point is {posi} not in any face.') 
 
 
 def compute_thetas(VEF_extended, singularities, indices, G_V):
@@ -267,7 +316,7 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
     I_F_e = np.zeros(len(F_e))
     I_F_v = np.zeros(len(F_v))
     F_singular = []
-    for singularity, index in zip(singularities, indices):
+    for singularity, index in tqdm(zip(singularities, indices), desc='Computing thetas 1/2', total=len(singularities)):
         
         # Check if the singularity is on a (original) edge, vertex, or face
         in_F_e = np.all((V_extended[F_e[:, 0]] > singularity) * (V_extended[F_e[:, 1]] < singularity), axis=1)
@@ -293,7 +342,7 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
     Thetas = np.zeros((num_E, len(F_singular)))
     constraints = []
     mask_removed_E = np.ones((num_E, len(F_singular)), dtype=bool)
-    for i, (f_singular, singularity, index) in enumerate(F_singular):
+    for i, (f_singular, singularity, index) in tqdm(enumerate(F_singular), desc='Computing thetas 2/2', total=len(F_singular)):
         # Compute the thetas for the singular face
         e_f = np.all(np.isin(E_extended, F_f[f_singular]), axis=1)
         
@@ -302,8 +351,8 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         V1 = singularity - V_extended[E_extended[e_f, 0]]
         V2 = singularity - V_extended[E_extended[e_f, 1]]
         
-        Z1 = compute_projection(B1, B2, normals, V1)
-        Z2 = compute_projection(B1, B2, normals, V2)
+        Z1 = complex_projection(B1, B2, normals, V1)
+        Z2 = complex_projection(B1, B2, normals, V2)
         
         Thetas[e_f, i] = index * np.arccos(
             ((Z1 * np.conjugate(Z2)) / 
@@ -318,7 +367,7 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         
         d1 = d1_full[mask_removed_f]
         d1 = d1[:, mask_removed_E[:, i]]
-        # lhs = d1.tocoo()
+        lhs = d1.tocoo()
         
         G_F = G_F_full[mask_removed_f]
         I_F = I_F_full[mask_removed_f]
@@ -327,19 +376,21 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         constraints.append({
             'type': 'eq', 'fun': lambda x, i=i: d1.dot(x[i*(num_E-3):(i+1)*(num_E-3)]) - rhs
             })
-
-        # thetas[f'Singularity {singularity}'][mask_removed_E[:, i]] = lsqr(lhs, rhs)[0]
         
-    # Compute the thetas for the rest of the faces
-    def objective(thetas):
-        # Return ||sum_i thetas_i||^2
-        return np.linalg.norm(np.sum(thetas.reshape(num_E-3, -1), axis=0))**2
+        Thetas[mask_removed_E[:, i], i] = lsqr(lhs, rhs)[0]
+        
+    # # Compute the thetas for the rest of the faces
+    # def objective(thetas):
+    #     # Return ||sum_i thetas_i||^2
+    #     return np.linalg.norm(np.sum(thetas.reshape(num_E-3, -1), axis=0))**2
     
-    thetas_init = np.random.rand((num_E-3) * len(F_singular))
+    # thetas_init = np.random.rand((num_E-3) * len(F_singular))
     
-    result = minimize(objective, thetas_init, constraints=constraints)
+    # print('Optimising thetas...')
+    # opt = {'disp':True,'maxiter':1}
+    # result = minimize(objective, thetas_init, constraints=constraints, options=opt) 
     
-    Thetas[mask_removed_E] = result.x
+    # Thetas[mask_removed_E] = result.x
     
     thetas = np.sum(Thetas, axis=1)
         
@@ -351,55 +402,148 @@ def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas):
     
     E_extended = np.concatenate([E_twin, E_comb])
     
-    A = np.zeros((len(E_extended) + 1, len(V_extended)), dtype=complex)
+    A = lil_matrix((len(E_extended) + 1, len(V_extended)), dtype=complex)
     A[np.arange(len(E_extended)), E_extended[:, 0]] = np.exp(1j * thetas)
     A[np.arange(len(E_extended)), E_extended[:, 1]] = -1
     A[-1, v_init] = 1
+    A = A.tocoo()
     
     b = np.zeros(len(E_extended) + 1, dtype=complex)
     b[-1] = z_init
     
-    Z = np.linalg.lstsq(A, b, rcond=None)[0]
+    U = lsqr(A, b)[0]
     
-    return Z
+    return U
 
 
-
-V = np.array([
-    [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 0, 1]
-], dtype=float)
-E = np.array([[0, 1], [1, 2], [2, 3], [3, 0], [0, 2], [1, 3]])
-F = np.array([[0, 1, 2], [2, 3, 0], [0, 1, 3], [1, 2, 3]])
-singularities = np.array([[0.8, 0.2, 0], [0.9, 0.1, 0]])
-indices = [1, -1]
-
-halfedges, E, edgeBoundMask, boundVertices, EH, EF = compute_edge_list(V, F)
-
-_, vorAreas, _,_ = compute_laplacian(V, F, E, edgeBoundMask, EF, onlyArea=True)
-
-angleDefect = compute_angle_defect(V, F, boundVertices)
-
-G_V = angleDefect / vorAreas
-
-VEF_extended = extended_mesh(V, E, F)
-# print(V_extended, '\n', E_twin, '\n', E_comb, '\n', F_f, '\n', F_e, '\n', F_v)
-# print(len(V_extended), len(E_twin), len(E_comb), len(F_f), len(F_e), len(F_v))
-
-thetas = compute_thetas(VEF_extended, singularities, indices, G_V)
-
-# print(thetas)
-
-Z = reconstruct_corners_from_thetas(0, 1j+1, VEF_extended, thetas)
-
-print(Z)
-
-# if __name__ == '__main__':
-
-#     ps.init()
-
-#     ps_mesh = ps.register_surface_mesh("Input Mesh", V, F)
+def reconstruct_linear_from_corners(VEF_extended, U):
+    V_extended, _, _, F_f, _, _ = VEF_extended
     
-#     ps.register_point_cloud("singularity marker", singularities, enabled=True)
+    # Compute the complex representation of the vertices on their face faces
+    A = lil_matrix((len(F_f)*4, len(F_f)*4), dtype=complex)
+    for i, f in tqdm(enumerate(F_f), desc='Reconstructing linear field coefficients', total=len(F_f)):
+        B1, B2, normals = compute_planes_F(V_extended, f[None, :])
+        
+        Zf = complex_projection(B1, B2, normals, V_extended[f])[0]
+        Uf = U[f]
+        
+        prod = Zf * Uf
+        
+        A[4*i:4*(i+1), 4*i:4*(i+1)] = np.array([
+            [prod[0].imag, prod[0].real, Uf[0].imag, Uf[0].real],
+            [prod[1].imag, prod[1].real, Uf[1].imag, Uf[1].real],
+            [prod[2].imag, prod[2].real, Uf[2].imag, Uf[2].real], 
+            [1, 0, 0, 0],
+        ])
+    A = A.tocoo()
+    
+    b = np.zeros(len(F_f)*4, dtype=complex)
+    b[np.arange(0, len(F_f)*4, 4)] = 1
+            
+    result = lsqr(A, b)[0].reshape(4, -1)
+    
+    coeffs = np.stack([result[0] + 1j * result[1], result[2] + 1j * result[3]], axis=1)
 
-#     ps.show()
+    return coeffs
+
+
+def construct_linear_field(V, F, singularities, indices, v_init, z_init):
+    
+    E = obtain_E(F)
+    
+    G_V = compute_G_V(V, E, F)
+    
+    VEF_extended = extended_mesh(V, E, F)
+    
+    thetas = compute_thetas(VEF_extended, singularities, indices, G_V)
+    
+    Z = reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas)
+    
+    coeffs = reconstruct_linear_from_corners(VEF_extended, Z)
+    
+    def linear_field(posis):
+        B1 = np.zeros((len(posis), 3))
+        B2 = np.zeros((len(posis), 3))
+        normals = np.zeros((len(posis), 3))
+        
+        # From the way the face faces are constructed,
+        # they are ordered the same way as the faces
+        faces_involved = np.array([is_in_face(V, F, posi)[0] for posi in posis])
+        
+        B1, B2, normals = compute_planes_F(V, F[faces_involved])
+        
+        Z = complex_projection(B1, B2, normals, posis, diagonal=True)
+        
+        vectors_complex = coeffs[faces_involved, 0] * Z + coeffs[faces_involved, 1]
+        
+        vectors = B1 * vectors_complex.real[:, None] + B2 * vectors_complex.imag[:, None]
+            
+        return vectors
+        
+    return linear_field
+
+
+def sample_points_and_vectors(V, F, field, num_samples=3):
+    points = []
+    for face in tqdm(F, desc='Sampling points and vectors', total=len(F)):
+        for j in range(num_samples):
+            for k in range(num_samples - j - 1):
+                # Barycentric coordinates
+                u = (j+1) / (num_samples + 1)
+                v = (k+1) / (num_samples + 1)
+                w = 1 - u - v
+                
+                # Interpolate to get the 3D point in the face
+                points.append(u * V[face[0]] + v * V[face[1]] + w * V[face[2]])
+    points = np.array(points)
+    vectors = field(points)
+    
+    return points, vectors
+
+
+
+# V = np.array([
+#     [0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1], [0, 1, 0]
+# ], dtype=float)
+# F = np.array([
+#     [0, 1, 3], [1, 4, 3], [1, 2, 4], [2, 5, 4], [2, 6, 5], [3, 4, 5], [3, 5, 6], [2, 7, 6], [2, 1, 7], [1, 0, 7], [0, 3, 7], [3, 6, 7]
+# ])
+# singularities = np.array([[0.2, 0.2, 0], [0.4, 0.4, 0]])
+# indices = [1, -1]
+# v_init = 0
+# z_init = 1j+1
+
+if __name__ == '__main__':
+
+    V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
+    
+    # singularities = np.array([
+    #     0.3 * V[F[0, 0]] + 0.3 * V[F[0, 1]] + 0.4 * V[F[0, 2]],
+    #     0.4 * V[F[100, 0]] + 0.3 * V[F[100, 1]] + 0.3 * V[F[100, 2]]
+    # ])
+    # indices = [1, -1]
+    
+    singularities = np.array([
+        0.3 * V[F[0, 0]] + 0.3 * V[F[0, 1]] + 0.4 * V[F[0, 2]]
+    ])
+    indices = [1]
+    v_init = 0
+    z_init = 1j+1
+
+    field = construct_linear_field(V, F, singularities, indices, v_init, z_init)
+
+    points, vectors = sample_points_and_vectors(V, F, field, num_samples=10)
+
+    # normalise the vectors
+    vectors = vectors / np.linalg.norm(vectors, axis=1)[:, None]
+
+    ps.init()
+    ps_mesh = ps.register_surface_mesh("Input Mesh", V, F)
+    ps_centroids = ps.register_point_cloud("Centroids", points, enabled=True)
+    
+    ps_centroids.add_vector_quantity('Samples', vectors, enabled=True)
+    
+    ps.register_point_cloud("singularity marker", singularities, enabled=True)
+
+    ps.show()
             

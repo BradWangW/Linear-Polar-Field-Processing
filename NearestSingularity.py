@@ -8,7 +8,7 @@ from DAFunctions import load_off_file, compute_areas_normals, compute_laplacian,
 if __name__ == '__main__':
     ps.init()
 
-    vertices, faces = load_off_file(os.path.join('data', 'lion-head.off'))
+    vertices, faces = load_off_file(os.path.join('data', 'bunny.off'))
 
     # ps_mesh = ps.register_surface_mesh("Input Mesh", vertices, faces)
 
