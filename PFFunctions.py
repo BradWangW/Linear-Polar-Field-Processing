@@ -413,6 +413,8 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         G_F = G_F_full[mask_removed_f]
         I_F = I_F_full[mask_removed_f]
         rhs = - G_F + 2 * np.pi * I_F
+        print(G_V)
+        print(np.sort(rhs))
         
         constraints.append({
             'type': 'eq', 'fun': lambda x, i=i: lhs.dot(x[i*(num_E-3):(i+1)*(num_E-3)]) - rhs
@@ -435,9 +437,9 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
     
     thetas = np.sum(Thetas, axis=1)
     
-    # print(max(thetas), min(thetas))
-    # print(np.sum(thetas))
-    # print(np.sum(thetas > 0.5), np.sum(thetas < 0.01))
+    print(max(thetas), min(thetas))
+    print(np.sum(thetas))
+    print(np.sum(thetas > 0.5), np.sum(thetas < 0.01))
         
     return thetas
         
@@ -456,6 +458,13 @@ def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas):
     b = np.zeros(len(E_extended) + 1, dtype=complex)
     b[-1] = z_init
     
+    # A = lil_matrix((len(E_extended), len(V_extended)), dtype=complex)
+    # A[np.arange(len(E_extended)), E_extended[:, 0]] = np.exp(1j * thetas)
+    # A[np.arange(len(E_extended)), E_extended[:, 1]] = -1
+    # A = A.tocoo()
+    
+    # b = np.zeros(len(E_extended), dtype=complex)
+    
     U, _, _, r1norm = lsqr(A, b)[:4]
     print(r1norm)
     
@@ -472,11 +481,6 @@ def reconstruct_linear_from_corners(VEF_extended, U):
     
     # Compute the complex representation of the vertices on their face faces
     A = lil_matrix((len(F_f)*4, len(F_f)*4), dtype=complex)
-    
-    # For test
-    singularity = 0.3 * V[F[0, 0]] + 0.3 * V[F[0, 1]] + 0.4 * V[F[0, 2]]
-    B1, B2, normals = compute_planes_F(V_extended, F_f)
-    singularity_proj = complex_projection(B1, B2, normals, singularity[None, :])[:, 0]
     
     for i, f in tqdm(enumerate(F_f), desc='Reconstructing linear field coefficients', total=len(F_f)):
         B1, B2, normals = compute_planes_F(V_extended, f[None, :])
@@ -510,7 +514,7 @@ def reconstruct_linear_from_corners(VEF_extended, U):
     A = A.tocoo()
     
     b = np.zeros(len(F_f)*4, dtype=complex)
-    b[np.arange(3, len(F_f)*4, 4)] = 0.0001
+    b[np.arange(3, len(F_f)*4, 4)] = 1
     
     # b = np.zeros(len(F_f)*3, dtype=complex)
     # print(b)
@@ -613,7 +617,7 @@ if __name__ == '__main__':
     points, vectors = sample_points_and_vectors(V, F, field, num_samples=10)
 
     # normalise the vectors
-    vectors = vectors / np.linalg.norm(vectors, axis=1)[:, None]
+    # vectors = vectors / np.linalg.norm(vectors, axis=1)[:, None]
 
     ps.init()
     ps_mesh = ps.register_surface_mesh("Input Mesh", V, F)
