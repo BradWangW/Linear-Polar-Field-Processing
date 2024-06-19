@@ -104,7 +104,8 @@ def compute_G_V(V, E, F):
 
     angleDefect = compute_angle_defect(V, F, boundVertices)
 
-    return angleDefect / vorAreas
+    # return angleDefect / vorAreas
+    return angleDefect
 
 
 def extended_mesh(V, E, F):
@@ -135,13 +136,14 @@ def extended_mesh(V, E, F):
             # Extended vertices
             V_extended.append(V[v].tolist())
             f_f.append(extended_index)
-            
-        # Twin edges
-        for i in range(3):
-            E_twin.append([f_f[-i-1], f_f[-((i+1) % 3)-1]])
         
         # Face-faces
         F_f.append(f_f)
+            
+        # Twin edges
+        E_twin += [
+            [f_f[0], f_f[1]], [f_f[1], f_f[2]], [f_f[2], f_f[0]]
+        ]
             
     # Edge-faces
     for e in tqdm(E, desc='Constructing extended mesh 2/3'):
@@ -176,6 +178,7 @@ def extended_mesh(V, E, F):
         v1 = V[v].copy()
         
         faces = np.array(F_f)[neighbours]
+        # Sort by the angle between the centroid of the face and the vertex
         v2s = np.mean(np.array(V_extended)[faces], axis=1).copy()
         
         # Avoid division by zero
@@ -214,35 +217,74 @@ def extended_mesh(V, E, F):
             F_v.append(sorted_indices.tolist())
         
         # Combinatorial edges
-        for i in range(len(sorted_indices)):
-            E_comb.append([extended_indices[i], extended_indices[(i+1) % len(sorted_indices)]])
-    
+        E_comb += [[sorted_indices[i], sorted_indices[(i+1) % len(sorted_indices)]] for i in range(len(sorted_indices))]
+        
     # Return np arrays for everything but the vertex-faces as they have variable length
     return (np.array(V_extended), np.array(E_twin), np.array(E_comb), 
             np.array(F_f), np.array(F_e), F_v)
+
+
+def find_indices(A, B):
+    '''
+    Find the indices of rows in B as they appear in A
+    '''
+    # Convert A and B to tuples for easy comparison
+    A_tuples = [tuple(row) for row in A]
+    B_tuples = [tuple(row) for row in B]
+
+    # Create a dictionary to map rows in A to their indices
+    A_dict = {row: idx for idx, row in enumerate(A_tuples)}
+
+    # Find the indices of rows in B as they appear in A
+    indices = [A_dict[row] for row in B_tuples]
+
+    return np.array(indices)
 
 
 def construct_d1(E_twin, E_comb, F_f, F_e, F_v):
     '''
         Compute the first derivative matrix of the face-edge operator.
     '''
-    E = np.concatenate([E_twin, E_comb])
+    E_extended = np.concatenate([E_twin, E_comb])
     
-    d1 = lil_matrix((len(F_f) + len(F_e) + len(F_v), len(E)))
+    d1 = lil_matrix((len(F_f) + len(F_e) + len(F_v), len(E_extended)))
     
-    # Supposing the faces are counter-clockwise oriented,
-    for i, f in tqdm(enumerate(F_f.tolist() + F_e.tolist() + F_v), desc='Constructing d1', total=len(F_f) + len(F_e) + len(F_v)):
-        for j, e in enumerate(E):
-            if e[0] in f and e[1] in f:
-                if e[0] == f[0]:
-                    d1[i, j] = 1
-                elif e[1] == f[0]:
-                    d1[i, j] = -1
-                else:
-                    d1[i, j] = 0
+    # The edges of face faces are oriented f[0] -> f[1] -> f[2], 
+    # so F_f[:, i:i+1%3] appears exactly the same in E_twin, 
+    # thus index-searching is enough.
+    for i in range(3):
+        # Find the indices of the face edges in the edge list
+        indices = find_indices(E_twin, np.stack([F_f[:, i], F_f[:, (i+1)%3]], axis=1))
+        
+        d1[np.arange(len(F_f)), indices] = 1
+    
+    # The edges of the edge faces are not oriented as the faces are,
+    # so we check the orientation differences
+    for i, f in enumerate(F_e):
+        candidate_indices = np.where(np.all(np.isin(E_extended, f), axis=1))[0]
+        E_f = E_extended[candidate_indices]
+        # print(f, candidate_indices, E_f.shape)
+        
+        for index, e in zip(candidate_indices, E_f):
+            if np.where(f == e[0])[0] < np.where(f == e[1])[0]:
+                d1[len(F_f) + i, index] = 1
+            elif np.where(f == e[0])[0] > np.where(f == e[1])[0]:
+                d1[len(F_f) + i, index] = -1
             else:
-                d1[i, j] = 0
-                
+                raise ValueError(f'The edge {e} is not in the face {f}, or the edge face is wrongly defined.')
+    
+    # The edges of the vertex faces are counter-clockwise oriented, 
+    # so similar to the face faces, index-searching is enough.
+    for i, f in tqdm(enumerate(F_v), desc='Constructing d1', total=len(F_v)):
+        # Find the indices of the combinatorial edges in the edge list
+        E_f = np.array([
+            [f[i], f[(i+1) % len(f)]] for i in range(len(f))
+        ])
+        
+        indices = find_indices(E_extended, E_f)
+        
+        d1[len(F_f) + len(F_e) + i, indices] = 1
+
     return d1.tocsr()
     
 
@@ -310,13 +352,13 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
     
     d1_full = construct_d1(E_twin, E_comb, F_f, F_e, F_v)
     
-    G_F_full = np.zeros(num_F)
-    G_F_full[-len(F_v):] = G_V
+    G_F_full = np.concatenate([np.zeros(len(F_f)), np.zeros(len(F_e)), G_V])
+    print(G_F_full.shape)
     
     I_F_e = np.zeros(len(F_e))
     I_F_v = np.zeros(len(F_v))
     F_singular = []
-    for singularity, index in tqdm(zip(singularities, indices), desc='Computing thetas 1/2', total=len(singularities)):
+    for singularity, index in zip(singularities, indices):
         
         # Check if the singularity is on a (original) edge, vertex, or face
         in_F_e = np.all((V_extended[F_e[:, 0]] > singularity) * (V_extended[F_e[:, 1]] < singularity), axis=1)
@@ -337,12 +379,11 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
     
     I_F_full = np.concatenate([np.zeros(len(F_f)), I_F_e, I_F_v])
     
-    
     # Compute the sets of thetas for each face singularity
     Thetas = np.zeros((num_E, len(F_singular)))
     constraints = []
     mask_removed_E = np.ones((num_E, len(F_singular)), dtype=bool)
-    for i, (f_singular, singularity, index) in tqdm(enumerate(F_singular), desc='Computing thetas 2/2', total=len(F_singular)):
+    for i, (f_singular, singularity, index) in enumerate(F_singular):
         # Compute the thetas for the singular face
         e_f = np.all(np.isin(E_extended, F_f[f_singular]), axis=1)
         
@@ -374,25 +415,29 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         rhs = - G_F + 2 * np.pi * I_F
         
         constraints.append({
-            'type': 'eq', 'fun': lambda x, i=i: d1.dot(x[i*(num_E-3):(i+1)*(num_E-3)]) - rhs
+            'type': 'eq', 'fun': lambda x, i=i: lhs.dot(x[i*(num_E-3):(i+1)*(num_E-3)]) - rhs
             })
         
-        Thetas[mask_removed_E[:, i], i] = lsqr(lhs, rhs)[0]
+        # Thetas[mask_removed_E[:, i], i] = lsqr(lhs, rhs)[0]
         
-    # # Compute the thetas for the rest of the faces
-    # def objective(thetas):
-    #     # Return ||sum_i thetas_i||^2
-    #     return np.linalg.norm(np.sum(thetas.reshape(num_E-3, -1), axis=0))**2
+    # Compute the thetas for the rest of the faces
+    def objective(thetas):
+        # Return ||sum_i thetas_i||^2
+        return np.linalg.norm(np.sum(thetas.reshape(num_E-3, -1), axis=0))**2
     
-    # thetas_init = np.random.rand((num_E-3) * len(F_singular))
+    thetas_init = np.zeros((num_E-3) * len(F_singular))
     
-    # print('Optimising thetas...')
-    # opt = {'disp':True,'maxiter':1}
-    # result = minimize(objective, thetas_init, constraints=constraints, options=opt) 
+    print('Optimising thetas...')
+    opt = {'disp':True,'maxiter':1}
+    result = minimize(objective, thetas_init, constraints=constraints, options=opt) 
     
-    # Thetas[mask_removed_E] = result.x
+    Thetas[mask_removed_E] = result.x
     
     thetas = np.sum(Thetas, axis=1)
+    
+    # print(max(thetas), min(thetas))
+    # print(np.sum(thetas))
+    # print(np.sum(thetas > 0.5), np.sum(thetas < 0.01))
         
     return thetas
         
@@ -411,7 +456,13 @@ def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas):
     b = np.zeros(len(E_extended) + 1, dtype=complex)
     b[-1] = z_init
     
-    U = lsqr(A, b)[0]
+    U, _, _, r1norm = lsqr(A, b)[:4]
+    print(r1norm)
+    
+    # normalise the vectors
+    U = U / np.abs(U)
+    
+    print(U)
     
     return U
 
@@ -421,24 +472,48 @@ def reconstruct_linear_from_corners(VEF_extended, U):
     
     # Compute the complex representation of the vertices on their face faces
     A = lil_matrix((len(F_f)*4, len(F_f)*4), dtype=complex)
+    
+    # For test
+    singularity = 0.3 * V[F[0, 0]] + 0.3 * V[F[0, 1]] + 0.4 * V[F[0, 2]]
+    B1, B2, normals = compute_planes_F(V_extended, F_f)
+    singularity_proj = complex_projection(B1, B2, normals, singularity[None, :])[:, 0]
+    
     for i, f in tqdm(enumerate(F_f), desc='Reconstructing linear field coefficients', total=len(F_f)):
         B1, B2, normals = compute_planes_F(V_extended, f[None, :])
         
+        # Compute the complex representation of the vertices on the face face
         Zf = complex_projection(B1, B2, normals, V_extended[f])[0]
         Uf = U[f]
         
         prod = Zf * Uf
         
+        # A[4*i:4*(i+1), 4*i:4*(i+1)] = np.array([
+        #     [prod[0].imag, prod[0].real, Uf[0].imag, Uf[0].real],
+        #     [prod[1].imag, prod[1].real, Uf[1].imag, Uf[1].real],
+        #     [prod[2].imag, prod[2].real, Uf[2].imag, Uf[2].real], 
+        #     [singularity_proj[i], singularity_proj[i], 1, 1]
+        # ])
+        
         A[4*i:4*(i+1), 4*i:4*(i+1)] = np.array([
             [prod[0].imag, prod[0].real, Uf[0].imag, Uf[0].real],
             [prod[1].imag, prod[1].real, Uf[1].imag, Uf[1].real],
             [prod[2].imag, prod[2].real, Uf[2].imag, Uf[2].real], 
-            [1, 0, 0, 0],
+            [1, 0, 0, 0]
         ])
+        
+        # A[3*i:3*(i+1), 4*i:4*(i+1)] = np.array([
+        #     [prod[0].imag, prod[0].real, Uf[0].imag, Uf[0].real],
+        #     [prod[1].imag, prod[1].real, Uf[1].imag, Uf[1].real],
+        #     [prod[2].imag, prod[2].real, Uf[2].imag, Uf[2].real]
+        # ])
+    
     A = A.tocoo()
     
     b = np.zeros(len(F_f)*4, dtype=complex)
-    b[np.arange(0, len(F_f)*4, 4)] = 1
+    b[np.arange(3, len(F_f)*4, 4)] = 0.0001
+    
+    # b = np.zeros(len(F_f)*3, dtype=complex)
+    # print(b)
             
     result = lsqr(A, b)[0].reshape(4, -1)
     
@@ -495,7 +570,9 @@ def sample_points_and_vectors(V, F, field, num_samples=3):
                 
                 # Interpolate to get the 3D point in the face
                 points.append(u * V[face[0]] + v * V[face[1]] + w * V[face[2]])
+                
     points = np.array(points)
+    
     vectors = field(points)
     
     return points, vectors
@@ -527,6 +604,7 @@ if __name__ == '__main__':
         0.3 * V[F[0, 0]] + 0.3 * V[F[0, 1]] + 0.4 * V[F[0, 2]]
     ])
     indices = [1]
+    
     v_init = 0
     z_init = 1j+1
 
