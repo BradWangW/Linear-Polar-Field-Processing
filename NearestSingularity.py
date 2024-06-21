@@ -2,7 +2,7 @@ import os
 import polyscope as ps
 import numpy as np
 from tqdm import tqdm
-from DAFunctions import load_off_file, compute_areas_normals, compute_laplacian, compute_mean_curvature_normal, compute_edge_list, compute_angle_defect
+from Functions.DAFunctions import load_off_file, compute_areas_normals, compute_laplacian, compute_mean_curvature_normal, compute_edge_list, compute_angle_defect
 
 
 if __name__ == '__main__':
