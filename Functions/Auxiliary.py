@@ -72,9 +72,8 @@ def complex_projection(B1, B2, normals, posis, diagonal=False):
             B2: (M, 3) array of the second basis vector of each face
             normals: (M, 3) array of the normal vector of each face
             posi: (N, 3) array of the points to be projected
-        Output:
-            X: (M, N, 3) array of the x-coordinates of the projected points
-            Y: (M, N, 3) array of the y-coordinates of the projected points
+        Output: (non-diagonal)
+            Z: (M, N) array of the complex-represented projection of each point
     '''
     if diagonal:
         Z = []

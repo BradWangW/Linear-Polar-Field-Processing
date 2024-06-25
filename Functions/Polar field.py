@@ -127,7 +127,7 @@ def extended_mesh(V, E, F):
         E_comb += [[sorted_indices[i], sorted_indices[(i+1) % len(sorted_indices)]] for i in range(len(sorted_indices))]
         
     # Return np arrays for everything but the vertex-faces as they have variable length
-    print('Extended mesh constructed. Lengths: ', len(V_extended), len(E_twin), len(E_comb), len(F_f), len(F_e), len(F_v))
+    # print('Extended mesh constructed. Lengths: ', len(V_extended), len(E_twin), len(E_comb), len(F_f), len(F_e), len(F_v))
     return (np.array(V_extended), np.array(E_twin), np.array(E_comb), 
             np.array(F_f), np.array(F_e), F_v)
 
@@ -145,7 +145,7 @@ def construct_d1(E_twin, E_comb, F_f, F_e, F_v):
     # thus index-searching is enough.
     for i in range(3):
         # Find the indices of the face edges in the edge list
-        indices = find_indices(E_twin, np.stack([F_f[:, i], F_f[:, (i+1)%3]], axis=1))
+        indices = find_indices(E_extended, np.stack([F_f[:, i], F_f[:, (i+1)%3]], axis=1))
         
         d1[np.arange(len(F_f)), indices] = 1
     
@@ -157,9 +157,12 @@ def construct_d1(E_twin, E_comb, F_f, F_e, F_v):
         # print(f, candidate_indices, E_f.shape)
         
         for index, e in zip(candidate_indices, E_f):
-            if np.where(f == e[0])[0] < np.where(f == e[1])[0]:
+            # print(f, e)
+            if (np.where(f == e[0])[0] == np.where(f == e[1])[0] - 1) or (f[-1] == e[0] and f[0] == e[1]):
+                # print('normal')
                 d1[len(F_f) + i, index] = 1
-            elif np.where(f == e[0])[0] > np.where(f == e[1])[0]:
+            elif np.where(f == e[0])[0] == np.where(f == e[1])[0] + 1 or (f[-1] == e[1] and f[0] == e[0]):
+                # print('reversed')
                 d1[len(F_f) + i, index] = -1
             else:
                 raise ValueError(f'The edge {e} is not in the face {f}, or the edge face is wrongly defined.')
@@ -198,6 +201,7 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
     
     I_F_e = np.zeros(len(F_e))
     I_F_v = np.zeros(len(F_v))
+    I_F_f = np.zeros(len(F_f))
     F_singular = []
     for singularity, index in zip(singularities, indices):
         
@@ -215,10 +219,14 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
             
             if candidate_faces:
                 F_singular.append((candidate_faces[0], singularity, index))
+                print('!!!!! Dont forget the old trivial connection trial !!!!!')
+                I_F_f[candidate_faces[0]] = index
             else:
                 raise ValueError(f'The singularity {singularity} is not in any face.')
     
-    I_F_full = np.concatenate([np.zeros(len(F_f)), I_F_e, I_F_v])
+    I_F_full = np.concatenate([I_F_f, I_F_e, I_F_v])
+    lhs = d1_full.tocoo()
+    rhs = - G_F_full + 2 * np.pi * I_F_full
     
     # Compute the sets of thetas for each face singularity
     Thetas = np.zeros((num_E, len(F_singular)))
@@ -236,6 +244,14 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         Z1 = complex_projection(B1, B2, normals, V1)[0]
         Z2 = complex_projection(B1, B2, normals, V2)[0]
         
+        # print(np.all(
+        #     np.mod(np.angle(Z2) - np.angle(Z1) + np.pi, 2*np.pi) - np.pi == np.mod(np.arccos(
+        #     ((Z1 * np.conjugate(Z2)) / 
+        #     (np.abs(Z1) * np.abs(Z2))).real
+        # ) + np.pi, 2*np.pi) - np.pi))
+        
+        # Thetas[e_f, i] = index * (np.angle(Z2) - np.angle(Z1))
+        
         Thetas[e_f, i] = index * np.arccos(
             ((Z1 * np.conjugate(Z2)) / 
             (np.abs(Z1) * np.abs(Z2))).real
@@ -251,26 +267,33 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         
         mask_removed_E[e_f, i] = False
         
-        d1 = d1_full[mask_removed_f]
-        d1 = d1[:, mask_removed_E[:, i]]
-        print(d1_full.shape, d1.shape)
-        lhs = d1.tocoo()
+        # d1 = d1_full[mask_removed_f]
+        # d1 = d1[:, mask_removed_E[:, i]]
+        # lhs = d1.tocoo()
         
-        G_F = G_F_full[mask_removed_f]
-        I_F = I_F_full[mask_removed_f]
-        rhs = - G_F + 2 * np.pi * I_F
-        print(rhs)
+        # G_F = G_F_full[mask_removed_f]
+        # I_F = I_F_full[mask_removed_f]
+        # rhs = - G_F + 2 * np.pi * I_F
         
         # Debug
         # print(G_F)
         # print(I_F)
         # print(rhs)
         
+        # constraints.append({
+        #     'type': 'eq', 'fun': lambda x, i=i: lhs.dot(x[i*(num_E-3):(i+1)*(num_E-3)]) - rhs
+        #     })
+        
         constraints.append({
-            'type': 'eq', 'fun': lambda x, i=i: lhs.dot(x[i*(num_E-3):(i+1)*(num_E-3)]) - rhs
+            'type': 'eq', 'fun': lambda x, i=i: lhs.dot(x[i*num_E:(i+1)*num_E]) - rhs
             })
         
-        Thetas[mask_removed_E[:, i], i] = lsqr(lhs, rhs)[0]
+        constraints.append({
+            'type': 'eq', 'fun': lambda x, i=i: x[i*num_E:(i+1)*num_E][e_f] - Thetas[e_f, i]
+        })
+        
+        Thetas[:, i], _, _, r1norm = lsqr(lhs, rhs)[:4]
+        print('Error for theta: ', r1norm)
         
     # Compute the thetas for the rest of the faces
     # def objective(thetas):
@@ -278,37 +301,91 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
     #     # return np.linalg.norm(np.sum(thetas.reshape(num_E-3, -1), axis=1))**2
     #     return np.linalg.norm(thetas)**2
     
-    # thetas_init = np.zeros((num_E-3) * len(F_singular))
+    # thetas_init = np.zeros(num_E * len(F_singular))
     
     # print('Optimising thetas...')
-    # opt = {'disp':True,'maxiter':1}
-    # # result = minimize(objective, thetas_init, constraints=constraints, options=opt) 
-    # result = minimize(objective, thetas_init, constraints=constraints) 
+    # opt = {'disp':True,'maxiter':10}
+    # print(constraints)
+    # result = minimize(objective, thetas_init, constraints=constraints, options=opt) 
+    # # result = minimize(objective, thetas_init, constraints=constraints) 
     
     # print(result.x)
     
-    # Thetas[mask_removed_E] = result.x
+    # Thetas = result.x.reshape(num_E, -1)
     
-    thetas = np.sum(Thetas, axis=1)
-    
-    print(d1_full.dot(thetas), - G_F_full + 2 * np.pi * I_F_full)
+    # print(thetas)
+    # print(d1_full.dot(thetas), - G_F_full + 2 * np.pi * I_F_full)
     
     # print(max(thetas), min(thetas))
     # print(np.sum(thetas))
     # print(np.sum(thetas > 0.5), np.sum(thetas < 0.01))
+    # print(E_twin)
+    # print(Thetas)
+    return Thetas
+
+
+def compute_face_pair_rotation(VEF_extended):
+    V_extended, _, E_comb, F_f, F_e, _ = VEF_extended
+    
+    rotations = np.zeros(E_comb.shape[0])
+    # The ith element in F_e and E represent the same edge
+    for f_e in F_e:
+        # Recall each f_e is formed as v1 -> v2 -> v2 -> v1
+        # so that v1 -> v2 is a twin edge and v1 -> v1 is a combinatorial edge
+        e1_comb = np.all(np.sort(E_comb, axis=1) == np.sort(f_e[[0, 3]]), axis=1)
+        e2_comb = np.all(np.sort(E_comb, axis=1) == np.sort(f_e[[1, 2]]), axis=1)
+
+        vec_e = V_extended[f_e[1]] - V_extended[f_e[0]]
         
-    return thetas
+        f1_f = np.where(np.any(np.isin(F_f, f_e[0]), axis=1))[0]
+        f2_f = np.where(np.any(np.isin(F_f, f_e[3]), axis=1))[0]
+        
+        B1, B2, normals = compute_planes_F(V_extended, F_f[[f1_f, f2_f]][:, 0])
+        f1 = F_f[f1_f]
+        f2 = F_f[f2_f]
+        # print(B1, B2)
+    
+        U = complex_projection(B1, B2, normals, vec_e[None, :])
+        # print(U)
+        U[U > 0] = U[U > 0] / np.abs(U[U > 0])
+        rotation = np.angle(U[1]) - np.angle(U[0])
+        # rotation = np.arccos((U[0] * np.conjugate(U[1])).real)
+        # print(np.mod(rotation + np.pi, 2*np.pi) - np.pi)
+        
+        if np.all(E_comb[e1_comb] == f_e[[0, 3]]):
+            rotations[e1_comb] = rotation
+        elif np.all(E_comb[e1_comb] == f_e[[3, 0]]):
+            rotations[e1_comb] = -rotation
+        else:
+            raise ValueError(f'{E_comb[e1_comb]} and {f_e[[0, 3]]} do not match.')
+        
+        if np.all(E_comb[e2_comb] == f_e[[1, 2]]):
+            rotations[e2_comb] = rotation
+        elif np.all(E_comb[e2_comb] == f_e[[2, 1]]):
+            rotations[e2_comb] = -rotation
+        else:
+            raise ValueError(f'{E_comb[e2_comb]} and {f_e[[1, 2]]} do not match.')
+        
+    return np.mod(rotations + np.pi, 2*np.pi) - np.pi
+        
         
 
-def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas):
+def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas, face_pair_rotations=None):
     V_extended, E_twin, E_comb, _, _, _ = VEF_extended
     
     E_extended = np.concatenate([E_twin, E_comb])
     
+    thetas[len(E_twin):, 0] += face_pair_rotations
+    thetas = np.mod(thetas + np.pi, 2*np.pi) - np.pi
+    print(thetas.shape)
+    print(len(E_extended))
+    
     A = lil_matrix((len(E_extended) + 1, len(V_extended)), dtype=complex)
     A[np.arange(len(E_extended)), E_extended[:, 0]] = np.exp(1j * thetas)
     A[np.arange(len(E_extended)), E_extended[:, 1]] = -1
+    A[np.arange(len(E_comb)) + len(E_twin), E_comb[:, 0]] *= np.exp(1j * face_pair_rotations)
     A[-1, v_init] = 1
+    # print(A)
     A = A.tocoo()
     
     b = np.zeros(len(E_extended) + 1, dtype=complex)
@@ -322,10 +399,10 @@ def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas):
     # b = np.zeros(len(E_extended), dtype=complex)
     
     U, _, _, r1norm = lsqr(A, b)[:4]
-    print(r1norm)
+    print('Error for corner vectors: ', r1norm)
     
     # normalise the vectors
-    U = U / np.abs(U)
+    U[U > 0] = U[U > 0] / np.abs(U[U > 0])
     
     print(U)
     
@@ -375,7 +452,11 @@ def reconstruct_linear_from_corners(VEF_extended, U):
     # b = np.zeros(len(F_f)*3, dtype=complex)
     # print(b)
             
-    result = lsqr(A, b)[0].reshape(4, -1)
+    result, _, _, r1norm = lsqr(A, b)[:4]
+    
+    print('Error for linear field coefficients: ', r1norm)
+    
+    result = result.reshape(4, -1)
     
     coeffs = np.stack([result[0] + 1j * result[1], result[2] + 1j * result[3]], axis=1)
 
@@ -392,7 +473,9 @@ def construct_linear_field(V, F, singularities, indices, v_init, z_init):
     
     thetas = compute_thetas(VEF_extended, singularities, indices, G_V)
     
-    Z = reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas)
+    face_pair_rotations = compute_face_pair_rotation(VEF_extended)
+    
+    Z = reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas, face_pair_rotations)
     
     coeffs = reconstruct_linear_from_corners(VEF_extended, Z)
     
@@ -415,25 +498,9 @@ def construct_linear_field(V, F, singularities, indices, v_init, z_init):
             
         return vectors
         
-    return linear_field
+    return linear_field, Z
 
-    points = []
-    for face in tqdm(F, desc='Sampling points and vectors', total=len(F)):
-        for j in range(num_samples):
-            for k in range(num_samples - j - 1):
-                # Barycentric coordinates
-                u = (j+1) / (num_samples + 1)
-                v = (k+1) / (num_samples + 1)
-                w = 1 - u - v
-                
-                # Interpolate to get the 3D point in the face
-                points.append(u * V[face[0]] + v * V[face[1]] + w * V[face[2]])
-                
-    points = np.array(points)
-    
-    vectors = field(points)
-    
-    return points, vectors
+
 
 
 
@@ -442,28 +509,27 @@ def construct_linear_field(V, F, singularities, indices, v_init, z_init):
 if __name__ == '__main__':
 
     # V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
-    
     # singularities = np.array([
     #     0.3 * V[F[0, 0]] + 0.3 * V[F[0, 1]] + 0.4 * V[F[0, 2]],
-    #     0.4 * V[F[100, 0]] + 0.3 * V[F[100, 1]] + 0.3 * V[F[100, 2]]
+    #     V[256]
     # ])
-    # indices = [1, -1]
-    # v_init = 0
-    # z_init = 1j+1
+    # indices = [1, 1]
+    # v_init = 100
+    # z_init = 1
     
     
     # A minimal triangulated tetrahedron
     V = np.array([
-        [0, 0, 0], [1, 0, 0], [0.5, 1, 0], [0.5, 0.5, 1]
+        [1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]
     ], dtype=float)
     F = np.array([
         [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
     ])
     # singularities = np.array([[0.2, 0.2, 0], [0.4, 0.4, 0]])
-    singularities = np.array([[0.4, 0.4, 0], [0.5, 0.5, 1]])
-    indices = [1, -1]
+    singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
+    indices = [1, 1]
     v_init = 0
-    z_init = 1j+1
+    z_init = 1
     
     
     # A minimal triangulated cube
@@ -473,14 +539,38 @@ if __name__ == '__main__':
     # F = np.array([
     #     [0, 1, 3], [1, 4, 3], [1, 2, 4], [2, 5, 4], [2, 6, 5], [3, 4, 5], [3, 5, 6], [2, 7, 6], [2, 1, 7], [1, 0, 7], [0, 3, 7], [3, 6, 7]
     # ])
-    # singularities = np.array([[0.2, 0.2, 0], [0.4, 0.4, 0]])
-    # indices = [1, -1]
+    # singularities = np.array([[0.2, 0.2, 0], [1, 1, 1]])
+    # indices = [1, 1]
     # v_init = 0
-    # z_init = 1j+1
+    # z_init = 1
+    
+    # A mini sphere
+    # V = np.array([
+    #     [1.0, 0.0, 0.0],   
+    #     [0.0, 1.0, 0.0],   
+    #     [0.0, 0.0, 1.0], 
+    #     [0.0, -1.0, 0.0],  
+    #     [0.0, 0.0, -1.0],   
+    #     [-1.0, 0.0, 0.0]
+    # ])
+    # F = np.array([
+    #     [0, 1, 2], 
+    #     [0, 2, 3], 
+    #     [0, 3, 4], 
+    #     [0, 4, 1], 
+    #     [5, 1, 2], 
+    #     [5, 2, 3], 
+    #     [5, 3, 4], 
+    #     [5, 4, 1], 
+    # ])
+    # singularities = np.array([[-1/3, -1/3, -1/3], [0, 0, 1]])
+    # indices = [1, 1]
+    # v_init = 0
+    # z_init = 1
 
-    field = construct_linear_field(V, F, singularities, indices, v_init, z_init)
+    field, Z = construct_linear_field(V, F, singularities, indices, v_init, z_init)
 
-    points, vectors = sample_points_and_vectors(V, F, field, num_samples=10)
+    points, vectors = sample_points_and_vectors(V, F, field, num_samples=30)
 
     # normalise the vectors
     vectors = vectors / np.linalg.norm(vectors, axis=1)[:, None]
