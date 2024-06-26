@@ -9,7 +9,16 @@ from contextlib import redirect_stdout, redirect_stderr
 from DAFunctions import load_off_file, compute_areas_normals, compute_laplacian, compute_mean_curvature_normal, compute_edge_list, compute_angle_defect
 from scipy.optimize import minimize
 
+def accumarray(indices, values):
+    '''
+    Accumulate values into an array using the indices.
+    '''
+    output = np.zeros((np.max(indices) + 1), dtype=values.dtype)
+    indFlat = indices.flatten()
+    valFlat = values.flatten()
+    np.add.at(output, indFlat, valFlat)
 
+    return output
 
 def compute_G_V(V, E, F):
     '''

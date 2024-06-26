@@ -294,6 +294,10 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         
         Thetas[:, i], _, _, r1norm = lsqr(lhs, rhs)[:4]
         print('Error for theta: ', r1norm)
+        Thetas[e_f, i] = index * np.arccos(
+            ((Z1 * np.conjugate(Z2)) / 
+            (np.abs(Z1) * np.abs(Z2))).real
+        )
         
     # Compute the thetas for the rest of the faces
     # def objective(thetas):
@@ -375,15 +379,15 @@ def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas, face_p
     
     E_extended = np.concatenate([E_twin, E_comb])
     
-    thetas[len(E_twin):, 0] += face_pair_rotations
+    thetas[len(E_twin):] += face_pair_rotations[:, np.newaxis]
     thetas = np.mod(thetas + np.pi, 2*np.pi) - np.pi
+    thetas[np.abs(thetas) < 1e-15] = 0
     print(thetas.shape)
     print(len(E_extended))
     
     A = lil_matrix((len(E_extended) + 1, len(V_extended)), dtype=complex)
     A[np.arange(len(E_extended)), E_extended[:, 0]] = np.exp(1j * thetas)
     A[np.arange(len(E_extended)), E_extended[:, 1]] = -1
-    A[np.arange(len(E_comb)) + len(E_twin), E_comb[:, 0]] *= np.exp(1j * face_pair_rotations)
     A[-1, v_init] = 1
     # print(A)
     A = A.tocoo()
@@ -402,9 +406,10 @@ def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas, face_p
     print('Error for corner vectors: ', r1norm)
     
     # normalise the vectors
-    U[U > 0] = U[U > 0] / np.abs(U[U > 0])
+    U[U > 0] /= np.abs(U[U > 0])
     
-    print(U)
+    print(np.concatenate([E_extended, thetas], axis=1))
+    print(np.angle(U))
     
     return U
 
@@ -519,17 +524,17 @@ if __name__ == '__main__':
     
     
     # A minimal triangulated tetrahedron
-    V = np.array([
-        [1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]
-    ], dtype=float)
-    F = np.array([
-        [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
-    ])
-    # singularities = np.array([[0.2, 0.2, 0], [0.4, 0.4, 0]])
-    singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
-    indices = [1, 1]
-    v_init = 0
-    z_init = 1
+    # V = np.array([
+    #     [1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]
+    # ], dtype=float)
+    # F = np.array([
+    #     [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
+    # ])
+    # # singularities = np.array([[0.2, 0.2, 0], [0.4, 0.4, 0]])
+    # singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
+    # indices = [1, 1]
+    # v_init = 10
+    # z_init = -1
     
     
     # A minimal triangulated cube
@@ -545,32 +550,32 @@ if __name__ == '__main__':
     # z_init = 1
     
     # A mini sphere
-    # V = np.array([
-    #     [1.0, 0.0, 0.0],   
-    #     [0.0, 1.0, 0.0],   
-    #     [0.0, 0.0, 1.0], 
-    #     [0.0, -1.0, 0.0],  
-    #     [0.0, 0.0, -1.0],   
-    #     [-1.0, 0.0, 0.0]
-    # ])
-    # F = np.array([
-    #     [0, 1, 2], 
-    #     [0, 2, 3], 
-    #     [0, 3, 4], 
-    #     [0, 4, 1], 
-    #     [5, 1, 2], 
-    #     [5, 2, 3], 
-    #     [5, 3, 4], 
-    #     [5, 4, 1], 
-    # ])
-    # singularities = np.array([[-1/3, -1/3, -1/3], [0, 0, 1]])
-    # indices = [1, 1]
-    # v_init = 0
-    # z_init = 1
+    V = np.array([
+        [1.0, 0.0, 0.0],   
+        [0.0, 1.0, 0.0],   
+        [0.0, 0.0, 1.0], 
+        [0.0, -1.0, 0.0],  
+        [0.0, 0.0, -1.0],   
+        [-1.0, 0.0, 0.0]
+    ])
+    F = np.array([
+        [0, 1, 2], 
+        [0, 2, 3], 
+        [0, 3, 4], 
+        [0, 4, 1], 
+        [5, 1, 2], 
+        [5, 2, 3], 
+        [5, 3, 4], 
+        [5, 4, 1], 
+    ])
+    singularities = np.array([[-1/3, -1/3, -1/3], [0, 0, 1]])
+    indices = [1, 1]
+    v_init = 0
+    z_init = 1
 
     field, Z = construct_linear_field(V, F, singularities, indices, v_init, z_init)
 
-    points, vectors = sample_points_and_vectors(V, F, field, num_samples=30)
+    points, vectors = sample_points_and_vectors(V, F, field, num_samples=25)
 
     # normalise the vectors
     vectors = vectors / np.linalg.norm(vectors, axis=1)[:, None]

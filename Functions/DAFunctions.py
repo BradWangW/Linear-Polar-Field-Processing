@@ -7,12 +7,15 @@ import os
 from contextlib import redirect_stdout, redirect_stderr
 
 
+
+
 def accumarray(indices, values):
+    '''
+    Accumulate values into an array using the indices.
+    '''
     output = np.zeros((np.max(indices) + 1), dtype=values.dtype)
     indFlat = indices.flatten()
     valFlat = values.flatten()
-    # for index in range(indFlat.shape[0]):
-    #     output[indFlat[index]] += valFlat[index]
     np.add.at(output, indFlat, valFlat)
 
     return output
