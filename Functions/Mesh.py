@@ -2,7 +2,7 @@ import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
 from scipy.sparse import lil_matrix
-from Auxiliary import accumarray, find_indices
+from Auxiliary import accumarray, find_indices, is_in_face
 
 
 
@@ -304,9 +304,47 @@ class Triangle_mesh():
             
         self.d1 = d1.tocsr()
         
-    def compute_thetas(self):
+    def compute_thetas(self, singularities=None, indices=None):
+        # Construct the index array and filter singular faces
         I_F_f = np.zeros(len(self.F_f))
         I_F_e = np.zeros(len(self.F_e))
         I_F_v = np.zeros(len(self.F_v))
         F_singular = []
-    
+        
+        for singularity, index in zip(singularities, indices):
+            
+            # Check if the singularity is in an edge or vertex
+            in_F_e = np.all(
+                (self.V_extended[self.F_e[:, 0]] > singularity) * (self.V_extended[self.F_e[:, 1]] < singularity), 
+                axis=1
+            )
+            in_F_v = np.all(
+                self.V_extended[[f_v[0] for f_v in self.F_v]] == singularity,
+                axis=1
+            )
+            
+            # If the singularity is in an edge or vertex, assign the index
+            if np.any(in_F_e):
+                I_F_e[in_F_e] = index
+            elif np.any(in_F_v):
+                I_F_v[in_F_v] = index
+            # If the singularity is in a face, it contributes a set of thetas
+            else:
+                F_candidate = is_in_face(self.V_extended, self.F_f, singularity)
+                
+                if F_candidate:
+                    F_singular.append((F_candidate[0], singularity, index))
+                else:
+                    raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')
+            
+        self.I_F = np.concatenate([I_F_f, I_F_e, I_F_v])
+        
+        # Compute the set of thetas for each face singularity
+        # by constrained optimisation using the KKT conditions
+        Thetas = np.zeros((len(self.E_extended), len(F_singular)))
+        
+        constraints = []
+        
+        
+
+Field - dictate a,b,c,d - thetas - rsconstruct U - reconstruct coefficients

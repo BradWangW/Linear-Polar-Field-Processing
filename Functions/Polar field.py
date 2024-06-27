@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.linalg
 import polyscope as ps
-from scipy.sparse import lil_matrix, csr_matrix, csc_matrix, coo_matrix, linalg, bmat, diags
+from scipy.sparse import lil_matrix, csr_matrix, csc_matrix, coo_matrix, linalg, bmat, diags, vstack
 from scipy.sparse.linalg import spsolve, splu, lsqr
 from tqdm import tqdm
 import os
@@ -220,21 +220,23 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
             if candidate_faces:
                 F_singular.append((candidate_faces[0], singularity, index))
                 print('!!!!! Dont forget the old trivial connection trial !!!!!')
-                I_F_f[candidate_faces[0]] = index
+                # I_F_f[candidate_faces[0]] = index
             else:
                 raise ValueError(f'The singularity {singularity} is not in any face.')
     
     I_F_full = np.concatenate([I_F_f, I_F_e, I_F_v])
-    lhs = d1_full.tocoo()
-    rhs = - G_F_full + 2 * np.pi * I_F_full
+    # lhs = vstack([d1_full for _ in range(len(F_singular))]).tocoo()
+    # rhs = np.vstack([- G_F_full + 2 * np.pi * I_F_full for _ in range(len(F_singular))])[0]
     
     # Compute the sets of thetas for each face singularity
     Thetas = np.zeros((num_E, len(F_singular)))
+
     constraints = []
     mask_removed_E = np.ones((num_E, len(F_singular)), dtype=bool)
     for i, (f_singular, singularity, index) in enumerate(F_singular):
         # Compute the thetas for the singular face
         e_f = np.all(np.isin(E_extended, F_f[f_singular]), axis=1)
+        print(np.where(e_f)[0])
         
         B1, B2, normals = compute_planes_F(V_extended, F_f[f_singular][None, :])
 
@@ -252,10 +254,29 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         
         # Thetas[e_f, i] = index * (np.angle(Z2) - np.angle(Z1))
         
-        Thetas[e_f, i] = index * np.arccos(
+        rotations = index * np.arccos(
             ((Z1 * np.conjugate(Z2)) / 
             (np.abs(Z1) * np.abs(Z2))).real
         )
+        
+        print(rotations, rotations.shape, (- G_F_full + 2 * np.pi * I_F_full).shape)
+        tem_arr = np.zeros((3, num_E))
+        tem_arr[np.arange(3), e_f] = 1
+        print(tem_arr)
+        lhs = vstack([d1_full, tem_arr]).tocoo()
+        print(lhs)
+        rhs = np.concatenate([- G_F_full + 2 * np.pi * I_F_full, rotations])
+        print(rhs)
+        
+        def constraint_fun(x):
+            return lhs.dot(x) - rhs
+        
+        constraints = [{
+            'type': 'eq', 
+            'fun': constraint_fun
+        }]
+        
+        # Thetas[e_f, i] = np.mod(rotations + np.pi, 2*np.pi) - np.pi
         
         # print(Thetas)
         # print(np.sum(Thetas))
@@ -284,33 +305,40 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         #     'type': 'eq', 'fun': lambda x, i=i: lhs.dot(x[i*(num_E-3):(i+1)*(num_E-3)]) - rhs
         #     })
         
-        constraints.append({
-            'type': 'eq', 'fun': lambda x, i=i: lhs.dot(x[i*num_E:(i+1)*num_E]) - rhs
-            })
-        
-        constraints.append({
-            'type': 'eq', 'fun': lambda x, i=i: x[i*num_E:(i+1)*num_E][e_f] - Thetas[e_f, i]
-        })
+        # constraints.append({
+        #     'type': 'eq', 'fun': lambda x: lhs.dot(x[i*num_E:(i+1)*num_E]) - rhs
+        #     })
+        # constraints.append({
+        #     'type': 'eq', 
+        #     'fun': lambda x, i=i: x[i*num_E:][e_f] - rotations, 
+        #     'args': (i,)
+        # })
         
         Thetas[:, i], _, _, r1norm = lsqr(lhs, rhs)[:4]
+        print(Thetas)
         print('Error for theta: ', r1norm)
-        Thetas[e_f, i] = index * np.arccos(
-            ((Z1 * np.conjugate(Z2)) / 
-            (np.abs(Z1) * np.abs(Z2))).real
-        )
+        # Thetas[e_f, i] = index * np.arccos(
+        #     ((Z1 * np.conjugate(Z2)) / 
+        #     (np.abs(Z1) * np.abs(Z2))).real
+        # )
         
     # Compute the thetas for the rest of the faces
     # def objective(thetas):
     #     # Return ||sum_i thetas_i||^2
-    #     # return np.linalg.norm(np.sum(thetas.reshape(num_E-3, -1), axis=1))**2
-    #     return np.linalg.norm(thetas)**2
+    #     return np.linalg.norm(np.sum(thetas.reshape(num_E, len(F_singular)), axis=1))
     
-    # thetas_init = np.zeros(num_E * len(F_singular))
+    # thetas_init = np.ones(num_E * len(F_singular)).flatten()
     
     # print('Optimising thetas...')
-    # opt = {'disp':True,'maxiter':10}
+    # opt = {'disp':True,
+    #        'maxiter':1000, 
+    #        'ftol': 1e-9}
     # print(constraints)
-    # result = minimize(objective, thetas_init, constraints=constraints, options=opt) 
+    # result = minimize(objective, 
+    #                   thetas_init, 
+    #                   constraints=constraints, 
+    #                   method='SLSQP',
+    #                   options=opt) 
     # # result = minimize(objective, thetas_init, constraints=constraints) 
     
     # print(result.x)
@@ -381,7 +409,7 @@ def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas, face_p
     
     thetas[len(E_twin):] += face_pair_rotations[:, np.newaxis]
     thetas = np.mod(thetas + np.pi, 2*np.pi) - np.pi
-    thetas[np.abs(thetas) < 1e-15] = 0
+    thetas[np.abs(thetas) < 1e-6] = 0
     print(thetas.shape)
     print(len(E_extended))
     
@@ -409,7 +437,7 @@ def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas, face_p
     U[U > 0] /= np.abs(U[U > 0])
     
     print(np.concatenate([E_extended, thetas], axis=1))
-    print(np.angle(U))
+    print(U)
     
     return U
 
@@ -524,17 +552,18 @@ if __name__ == '__main__':
     
     
     # A minimal triangulated tetrahedron
-    # V = np.array([
-    #     [1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]
-    # ], dtype=float)
-    # F = np.array([
-    #     [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
-    # ])
-    # # singularities = np.array([[0.2, 0.2, 0], [0.4, 0.4, 0]])
+    V = np.array([
+        [1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]
+    ], dtype=float)
+    F = np.array([
+        [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
+    ])
     # singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
     # indices = [1, 1]
-    # v_init = 10
-    # z_init = -1
+    singularities = np.array([[1/3, 1/3, -1/3]])
+    indices = [2]
+    v_init = 10
+    z_init = -1
     
     
     # A minimal triangulated cube
@@ -550,28 +579,28 @@ if __name__ == '__main__':
     # z_init = 1
     
     # A mini sphere
-    V = np.array([
-        [1.0, 0.0, 0.0],   
-        [0.0, 1.0, 0.0],   
-        [0.0, 0.0, 1.0], 
-        [0.0, -1.0, 0.0],  
-        [0.0, 0.0, -1.0],   
-        [-1.0, 0.0, 0.0]
-    ])
-    F = np.array([
-        [0, 1, 2], 
-        [0, 2, 3], 
-        [0, 3, 4], 
-        [0, 4, 1], 
-        [5, 1, 2], 
-        [5, 2, 3], 
-        [5, 3, 4], 
-        [5, 4, 1], 
-    ])
-    singularities = np.array([[-1/3, -1/3, -1/3], [0, 0, 1]])
-    indices = [1, 1]
-    v_init = 0
-    z_init = 1
+    # V = np.array([
+    #     [1.0, 0.0, 0.0],   
+    #     [0.0, 1.0, 0.0],   
+    #     [0.0, 0.0, 1.0], 
+    #     [0.0, -1.0, 0.0],  
+    #     [0.0, 0.0, -1.0],   
+    #     [-1.0, 0.0, 0.0]
+    # ])
+    # F = np.array([
+    #     [0, 1, 2], 
+    #     [0, 2, 3], 
+    #     [0, 3, 4], 
+    #     [0, 4, 1], 
+    #     [5, 1, 2], 
+    #     [5, 2, 3], 
+    #     [5, 3, 4], 
+    #     [5, 4, 1], 
+    # ])
+    # singularities = np.array([[1/3, 1/3, 1/3]])
+    # indices = [2]
+    # v_init = 0
+    # z_init = 1
 
     field, Z = construct_linear_field(V, F, singularities, indices, v_init, z_init)
 
