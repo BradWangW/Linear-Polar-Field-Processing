@@ -202,6 +202,7 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
     I_F_e = np.zeros(len(F_e))
     I_F_v = np.zeros(len(F_v))
     I_F_f = np.zeros(len(F_f))
+    global F_singular
     F_singular = []
     for singularity, index in zip(singularities, indices):
         
@@ -410,8 +411,8 @@ def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas, face_p
     thetas[len(E_twin):] += face_pair_rotations[:, np.newaxis]
     thetas = np.mod(thetas + np.pi, 2*np.pi) - np.pi
     thetas[np.abs(thetas) < 1e-6] = 0
-    print(thetas.shape)
-    print(len(E_extended))
+    # print(thetas.shape)
+    # print(len(E_extended))
     
     A = lil_matrix((len(E_extended) + 1, len(V_extended)), dtype=complex)
     A[np.arange(len(E_extended)), E_extended[:, 0]] = np.exp(1j * thetas)
@@ -434,10 +435,12 @@ def reconstruct_corners_from_thetas(v_init, z_init, VEF_extended, thetas, face_p
     print('Error for corner vectors: ', r1norm)
     
     # normalise the vectors
-    U[U > 0] /= np.abs(U[U > 0])
+    U[U != 0] /= np.abs(U[U != 0])
     
-    print(np.concatenate([E_extended, thetas], axis=1))
-    print(U)
+    print(np.abs(U))
+    
+    # print(np.concatenate([E_extended, thetas], axis=1))
+    # print(U)
     
     return U
 
@@ -446,52 +449,60 @@ def reconstruct_linear_from_corners(VEF_extended, U):
     V_extended, _, _, F_f, _, _ = VEF_extended
     
     # Compute the complex representation of the vertices on their face faces
-    A = lil_matrix((len(F_f)*4, len(F_f)*4), dtype=complex)
+    A = lil_matrix((len(F_f)*4, len(F_f)*4), dtype=float)
+    b = np.zeros(len(F_f)*4, dtype=float)
+    global F_singular
+    singularities = [singularity for _, singularity, _ in F_singular]
+    indices = [index for _, _, index in F_singular]
+    F_singular = [f for f, _, _ in F_singular]
     
     for i, f in tqdm(enumerate(F_f), desc='Reconstructing linear field coefficients', total=len(F_f)):
         B1, B2, normals = compute_planes_F(V_extended, f[None, :])
-        
         # Compute the complex representation of the vertices on the face face
-        Zf = complex_projection(B1, B2, normals, V_extended[f])[0]
+        Zf = complex_projection(B1, B2, normals, V_extended[f] - V_extended[f[0]])[0]
         Uf = U[f]
         
         prod = Zf * Uf
         
-        # A[4*i:4*(i+1), 4*i:4*(i+1)] = np.array([
+        if i in F_singular:
+            singularity = np.array(singularities[np.where(np.array(F_singular) == i)[0][0]])
+            zc = complex_projection(B1, B2, normals, np.array([singularity - V_extended[f[0]]]))[0][0]
+            print(zc)
+            first_line = [0, 0, 1, 0]
+            b[4*i] = Uf[0].real
+            last_line = [zc.real + zc.imag, zc.real - zc.imag, 1, 1]
+        else:
+            first_line = [prod[0].imag, prod[0].real, Uf[0].imag, Uf[0].real]
+            last_line = [0, 0, 1, 0]
+            b[4*i + 3] = Uf[0].real
+            
+        # print(np.array([
         #     [prod[0].imag, prod[0].real, Uf[0].imag, Uf[0].real],
         #     [prod[1].imag, prod[1].real, Uf[1].imag, Uf[1].real],
         #     [prod[2].imag, prod[2].real, Uf[2].imag, Uf[2].real], 
-        #     [singularity_proj[i], singularity_proj[i], 1, 1]
-        # ])
+        #     last_line
+        # ], dtype=complex))
         
         A[4*i:4*(i+1), 4*i:4*(i+1)] = np.array([
-            [prod[0].imag, prod[0].real, Uf[0].imag, Uf[0].real],
+            first_line,
             [prod[1].imag, prod[1].real, Uf[1].imag, Uf[1].real],
             [prod[2].imag, prod[2].real, Uf[2].imag, Uf[2].real], 
-            [1, 0, 0, 0]
-        ])
-        
-        # A[3*i:3*(i+1), 4*i:4*(i+1)] = np.array([
-        #     [prod[0].imag, prod[0].real, Uf[0].imag, Uf[0].real],
-        #     [prod[1].imag, prod[1].real, Uf[1].imag, Uf[1].real],
-        #     [prod[2].imag, prod[2].real, Uf[2].imag, Uf[2].real]
-        # ])
+            last_line
+        ], dtype=complex)
     
     A = A.tocoo()
-    
-    b = np.zeros(len(F_f)*4, dtype=complex)
-    b[np.arange(3, len(F_f)*4, 4)] = 1
-    
-    # b = np.zeros(len(F_f)*3, dtype=complex)
-    # print(b)
             
     result, _, _, r1norm = lsqr(A, b)[:4]
     
     print('Error for linear field coefficients: ', r1norm)
-    
+    print(result)
     result = result.reshape(4, -1)
+    print(result)
     
-    coeffs = np.stack([result[0] + 1j * result[1], result[2] + 1j * result[3]], axis=1)
+    coeffs = np.stack([result[:, 0] + 1j * result[:, 1], result[:, 2] + 1j * result[:, 3]], axis=1)
+    print(coeffs)
+    
+    print('Singularities: ', -coeffs[:, 1] / coeffs[:, 0])
 
     return coeffs
 
@@ -558,10 +569,10 @@ if __name__ == '__main__':
     F = np.array([
         [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
     ])
-    # singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
-    # indices = [1, 1]
-    singularities = np.array([[1/3, 1/3, -1/3]])
-    indices = [2]
+    singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
+    indices = [1, 1]
+    # singularities = np.array([[1/3, 1/3, -1/3]])
+    # indices = [2]
     v_init = 10
     z_init = -1
     

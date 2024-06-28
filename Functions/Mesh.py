@@ -2,7 +2,8 @@ import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
 from scipy.sparse import lil_matrix
-from Auxiliary import accumarray, find_indices, is_in_face
+from Auxiliary import accumarray, find_indices, is_in_face, complex_projection
+from scipy.sparse.linalg import spsolve, splu, lsqr
 
 
 
@@ -305,37 +306,42 @@ class Triangle_mesh():
         self.d1 = d1.tocsr()
         
     def compute_thetas(self, singularities=None, indices=None):
+        '''
+            Compute the set of thetas for each face singularity 
+            by constrained optimisation using the KKT conditions.
+        '''
         # Construct the index array and filter singular faces
         I_F_f = np.zeros(len(self.F_f))
         I_F_e = np.zeros(len(self.F_e))
         I_F_v = np.zeros(len(self.F_v))
         F_singular = []
         
-        for singularity, index in zip(singularities, indices):
-            
-            # Check if the singularity is in an edge or vertex
-            in_F_e = np.all(
-                (self.V_extended[self.F_e[:, 0]] > singularity) * (self.V_extended[self.F_e[:, 1]] < singularity), 
-                axis=1
-            )
-            in_F_v = np.all(
-                self.V_extended[[f_v[0] for f_v in self.F_v]] == singularity,
-                axis=1
-            )
-            
-            # If the singularity is in an edge or vertex, assign the index
-            if np.any(in_F_e):
-                I_F_e[in_F_e] = index
-            elif np.any(in_F_v):
-                I_F_v[in_F_v] = index
-            # If the singularity is in a face, it contributes a set of thetas
-            else:
-                F_candidate = is_in_face(self.V_extended, self.F_f, singularity)
+        if singularities:
+            for singularity, index in zip(singularities, indices):
                 
-                if F_candidate:
-                    F_singular.append((F_candidate[0], singularity, index))
+                # Check if the singularity is in an edge or vertex
+                in_F_e = np.all(
+                    (self.V_extended[self.F_e[:, 0]] > singularity) * (self.V_extended[self.F_e[:, 1]] < singularity), 
+                    axis=1
+                )
+                in_F_v = np.all(
+                    self.V_extended[[f_v[0] for f_v in self.F_v]] == singularity,
+                    axis=1
+                )
+                
+                # If the singularity is in an edge or vertex, assign the index
+                if np.any(in_F_e):
+                    I_F_e[in_F_e] = index
+                elif np.any(in_F_v):
+                    I_F_v[in_F_v] = index
+                # If the singularity is in a face, it contributes a set of thetas
                 else:
-                    raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')
+                    F_candidate = is_in_face(self.V_extended, self.F_f, singularity)
+                    
+                    if F_candidate:
+                        F_singular.append((F_candidate[0], singularity, index))
+                    else:
+                        raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')
             
         self.I_F = np.concatenate([I_F_f, I_F_e, I_F_v])
         
@@ -343,7 +349,99 @@ class Triangle_mesh():
         # by constrained optimisation using the KKT conditions
         Thetas = np.zeros((len(self.E_extended), len(F_singular)))
         
-        constraints = []
+        return Thetas
+    
+    def reconstruct_corners_from_thetas(self, v_init, z_init, Thetas):
+        Us = np.zeros((len(self.V_extended), Thetas.shape[1]), dtype=complex)
+        itns = np.zeros(Thetas.shape[1])
+        r1norms = np.zeros(Thetas.shape[1])
+        
+        for i in range(Thetas.shape[1]):
+            thetas = Thetas[:, i]
+            
+            lhs = lil_matrix((len(self.E_extended) + 1, len(self.V_extended)), dtype=complex)
+            lhs[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = np.exp(1j * thetas)
+            lhs[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
+            lhs[-1, v_init] = 1
+            
+            rhs = np.zeros(len(self.E_extended) + 1, dtype=complex)
+            rhs[-1] = z_init / np.abs(z_init)
+            
+            Us[:, i], _, itns[i], r1norms[i] = lsqr(lhs.tocsr(), rhs)
+            
+        print(f'Corner reconstruction iterations and residuals',
+              np.stack([itns, r1norms], axis=1))
+        
+        return Us
+    
+    def reconstruct_linear_from_corners(self, Us, singularities_F=None):
+        if Us.shape[1] != len(singularities_F):
+            raise ValueError('The number of singularities and the number of sets of corner values do not match.')
+
+        coeffs = np.zeros((len(self.F_f), Us.shape[1], 2), dtype=complex)
+        itns = np.zeros(Us.shape[1])
+        r1norms = np.zeros(Us.shape[1])
+        
+        for i, singularity in tqdm(enumerate(singularities_F), 
+                                   desc='Reconstructing linear field coefficients'):
+            U = Us[:, i]
+            
+            # Find the face containing the singularity
+            f_singular = is_in_face(self.V_extended, self.F_f, singularity)[0]
+            
+            if f_singular == None:
+                raise ValueError(f'The singularity {singularity} is not in any face.')
+            
+            # Construct the linear system for the coefficients of the linear field
+            lhs = lil_matrix((len(self.F_f) * 4, len(self.F_f) * 4), dtype=float)
+            rhs = np.zeros(len(self.F_f) * 4, dtype=float)
+            
+            for j, f in tqdm(enumerate(self.F_f), 
+                             desc=f'Constructing the linear system for singularity {singularity}',
+                             leave=False):
+                B1, B2, normals = self.compute_planes(self.V_extended, f[np.newaxis, :])
+                
+                # Compute the complex representation of the vertices on the face face
+                Zf = complex_projection(B1, B2, normals, self.V_extended[f] - self.V_extended[f[0]])[0]
+                Uf = U[f]
+                prod = Zf * Uf
+                
+                # If the face is singular, the last row explicitly specifies 
+                # the singularity (zero point of the field)
+                if j == f_singular:
+                    zc = complex_projection(
+                        B1, B2, normals, 
+                        np.array([singularity - self.V_extended[f[0]]])
+                    )[0, 0]
+                    last_line = [zc.real + zc.imag, zc.real - zc.imag, 1, 1]
+                # If the face is not singular, the last row aligns the first corner 
+                # value up to +-sign and scale, as for the other two corners
+                else:
+                    last_line = [prod[0].imag, prod[0].real, Uf[0].imag, Uf[0].real]
+                
+                # Construct the linear system (blocks of 4x4 in the matrix)
+                lhs[4*j:4*(j+1), 4*j:4*(j+1)] = np.array([
+                    [0, 0, 1, 0],
+                    [prod[1].imag, prod[1].real, Uf[1].imag, Uf[1].real],
+                    [prod[2].imag, prod[2].real, Uf[2].imag, Uf[2].real], 
+                    last_line
+                ], dtype=float)
+                rhs[4*j] = Uf[0].real
+            
+            result, _, itns[i], r1norms[i] = lsqr(lhs.tocsr(), rhs)[:4]
+            
+            result = result.reshape(-1, 4)
+            
+            coeffs[:, i, 0] = result[:, 0] + 1j * result[:, 1]
+            coeffs[:, i, 1] = result[:, 2] + 1j * result[:, 3]
+        
+        print(f'Linear field reconstruction iterations and residuals',
+              np.stack([itns, r1norms], axis=1))
+        
+        return coeffs
+            
+                    
+        
         
         
 
