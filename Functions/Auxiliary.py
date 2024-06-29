@@ -33,9 +33,8 @@ def compute_G_V(V, E, F):
     # return angleDefect / vorAreas
     return angleDefect
 
-
-def compute_planes_F(V, F):
-    '''
+def compute_planes(V, F):
+    ''' 
     Compute the orthonormal basis vectors and the normal of the plane of each face.
         Input:
             V: (N, 3) array of vertices
@@ -45,20 +44,18 @@ def compute_planes_F(V, F):
             B2: (M, 3) array of the second basis vector of each face
             normals: (M, 3) array of the normal vector of each face
     '''
-    V1 = V[F[:, 0]]
-    V2 = V[F[:, 1]]
-    V3 = V[F[:, 2]]
-    
+    V_F = V[F]
+
     # Two basis vectors of the plane
-    B1 = V2 - V1
-    B2 = V3 - V1
-    
+    B1 = V_F[:, 1, :] - V_F[:, 0, :]
+    B2 = V_F[:, 2, :] - V_F[:, 0, :]
+
     # Check parallelism
     para = np.all(np.cross(B1, B2) == 0, axis=1)
     if np.any(para):
         raise ValueError(f'The face(s) {F[np.where(para)]} is degenerate.')
     
-    # Normal vector of the plane
+    # Face normals of the planes
     normals = np.cross(B1, B2)
     normals = normals / np.linalg.norm(normals, axis=1)[:, None]
     
@@ -161,7 +158,7 @@ def is_in_face(V, F, posi):
             False if the point is not in any face, 
             the index of the face if the point is in a face
     '''
-    _, _, normals = compute_planes_F(V, F)
+    _, _, normals = compute_planes(V, F)
     
     # Filter the faces whose plane the point is in
     is_in_plane = np.where(np.abs(np.sum(normals * (posi[np.newaxis, :] - V[F[:, 0]]), axis=1)) < 1e-15)[0]

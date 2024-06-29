@@ -239,7 +239,7 @@ def compute_thetas(VEF_extended, singularities, indices, G_V):
         e_f = np.all(np.isin(E_extended, F_f[f_singular]), axis=1)
         print(np.where(e_f)[0])
         
-        B1, B2, normals = compute_planes_F(V_extended, F_f[f_singular][None, :])
+        B1, B2, normals = compute_planes(V_extended, F_f[f_singular][None, :])
 
         V1 = singularity - V_extended[E_extended[e_f, 0]]
         V2 = singularity - V_extended[E_extended[e_f, 1]]
@@ -373,7 +373,7 @@ def compute_face_pair_rotation(VEF_extended):
         f1_f = np.where(np.any(np.isin(F_f, f_e[0]), axis=1))[0]
         f2_f = np.where(np.any(np.isin(F_f, f_e[3]), axis=1))[0]
         
-        B1, B2, normals = compute_planes_F(V_extended, F_f[[f1_f, f2_f]][:, 0])
+        B1, B2, normals = compute_planes(V_extended, F_f[[f1_f, f2_f]][:, 0])
         f1 = F_f[f1_f]
         f2 = F_f[f2_f]
         # print(B1, B2)
@@ -457,7 +457,7 @@ def reconstruct_linear_from_corners(VEF_extended, U):
     F_singular = [f for f, _, _ in F_singular]
     
     for i, f in tqdm(enumerate(F_f), desc='Reconstructing linear field coefficients', total=len(F_f)):
-        B1, B2, normals = compute_planes_F(V_extended, f[None, :])
+        B1, B2, normals = compute_planes(V_extended, f[None, :])
         # Compute the complex representation of the vertices on the face face
         Zf = complex_projection(B1, B2, normals, V_extended[f] - V_extended[f[0]])[0]
         Uf = U[f]
@@ -532,9 +532,11 @@ def construct_linear_field(V, F, singularities, indices, v_init, z_init):
         # they are ordered the same way as the faces
         faces_involved = np.array([is_in_face(V, F, posi)[0] for posi in posis])
         
-        B1, B2, normals = compute_planes_F(V, F[faces_involved])
+        B1, B2, normals = compute_planes(V, F[faces_involved])
         
-        Z = complex_projection(B1, B2, normals, posis, diagonal=True)
+        print(posis.shape, V[F[faces_involved, 0]].shape)
+        
+        Z = complex_projection(B1, B2, normals, posis - V[F[faces_involved, 0]], diagonal=True)
         
         vectors_complex = coeffs[faces_involved, 0] * Z + coeffs[faces_involved, 1]
         

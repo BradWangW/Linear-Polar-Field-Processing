@@ -2,8 +2,8 @@ import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
 from scipy.sparse import lil_matrix
-from Auxiliary import accumarray, find_indices, is_in_face, complex_projection
-from scipy.sparse.linalg import spsolve, splu, lsqr
+from Auxiliary import accumarray, find_indices, is_in_face, compute_planes, complex_projection
+from scipy.sparse.linalg import lsqr
 
 
 
@@ -17,6 +17,8 @@ class Triangle_mesh():
         self.E = self.obtain_E(F)
         
         self.V_boundary = self.compute_V_boundary(F)
+        
+        self.B1, self.B2, self.normals = compute_planes(V, F)
         
         self.G_V = self.compute_angle_defect(V, F, self.V_boundary)
         
@@ -56,41 +58,6 @@ class Triangle_mesh():
         
         return V_boundary
         
-    def compute_planes(V, F):
-        ''' 
-        Compute the orthonormal basis vectors and the normal of the plane of each face.
-            Input:
-                V: (N, 3) array of vertices
-                F: (M, 3) array of faces
-            Output:
-                B1: (M, 3) array of the first basis vector of each face
-                B2: (M, 3) array of the second basis vector of each face
-                normals: (M, 3) array of the normal vector of each face
-        '''
-        V_F = V[F]
-
-        # Two basis vectors of the plane
-        B1 = V_F[:, 1, :] - V_F[:, 0, :]
-        B2 = V_F[:, 2, :] - V_F[:, 0, :]
-
-        # Check parallelism
-        para = np.all(np.cross(B1, B2) == 0, axis=1)
-        if np.any(para):
-            raise ValueError(f'The face(s) {F[np.where(para)]} is degenerate.')
-        
-        # Face normals of the planes
-        normals = np.cross(B1, B2)
-        normals = normals / np.linalg.norm(normals, axis=1)[:, None]
-        
-        # Correct for orthogonal basis vectors
-        B2 = np.cross(normals, B1)
-        
-        # Normalise the basis vectors
-        B1 = B1 / np.linalg.norm(B1, axis=1)[:, None]
-        B2 = B2 / np.linalg.norm(B2, axis=1)[:, None]
-        
-        return B1, B2, normals
-    
     def compute_angle_defect(self):
         angles = np.zeros(self.F.shape)
         
@@ -118,10 +85,17 @@ class Triangle_mesh():
         G_V = (2 - boundVerticesMask) * np.pi - angles
         return G_V
       
-    def sort_neighbours(V, F, v, neighbours=None):
+    def sort_neighbours(self, v, neighbours=None, extended=True):
         '''
         Sort the neighbour faces of a vertex in counter-clockwise order.
         '''
+        if extended:
+            V = self.V_extended
+            F = self.F_f
+        else:
+            V = self.V
+            F = self.F
+        
         if not neighbours:
             neighbours = np.any(F == v, axis=1)
             
@@ -226,7 +200,7 @@ class Triangle_mesh():
             neighbours = np.any(np.isin(F_f, indices_extended), axis=1)
             
             # Sort the neighbours in counter-clockwise order
-            order = self.sort_neighbours(self.V, self.F, v, neighbours)
+            order = self.sort_neighbours(v, neighbours, extended=True)
             indices_sorted = np.array(indices_extended)[order]
             
             # If the vertex is not on the boundary
@@ -351,7 +325,7 @@ class Triangle_mesh():
         
         return Thetas
     
-    def reconstruct_corners_from_thetas(self, v_init, z_init, Thetas):
+    def reconstruct_corners_from_thetas(self, Thetas, v_init, z_init):
         Us = np.zeros((len(self.V_extended), Thetas.shape[1]), dtype=complex)
         itns = np.zeros(Thetas.shape[1])
         r1norms = np.zeros(Thetas.shape[1])
@@ -399,10 +373,10 @@ class Triangle_mesh():
             for j, f in tqdm(enumerate(self.F_f), 
                              desc=f'Constructing the linear system for singularity {singularity}',
                              leave=False):
-                B1, B2, normals = self.compute_planes(self.V_extended, f[np.newaxis, :])
+                b1 = self.B1[f]; b2 = self.B2[f]; normal = self.normals[f]
                 
                 # Compute the complex representation of the vertices on the face face
-                Zf = complex_projection(B1, B2, normals, self.V_extended[f] - self.V_extended[f[0]])[0]
+                Zf = complex_projection(b1, b2, normal, self.V_extended[f] - self.V_extended[f[0]])[0]
                 Uf = U[f]
                 prod = Zf * Uf
                 
@@ -410,7 +384,7 @@ class Triangle_mesh():
                 # the singularity (zero point of the field)
                 if j == f_singular:
                     zc = complex_projection(
-                        B1, B2, normals, 
+                        b1, b2, normal, 
                         np.array([singularity - self.V_extended[f[0]]])
                     )[0, 0]
                     last_line = [zc.real + zc.imag, zc.real - zc.imag, 1, 1]
@@ -439,10 +413,60 @@ class Triangle_mesh():
               np.stack([itns, r1norms], axis=1))
         
         return coeffs
+    
+    def compute_linear_field(self, coeffs, indices=None):
+        def linear_field(posis):
+            # Find the faces where the points are located
+            F_involved = np.array([
+                is_in_face(self.V_extended, self.F_f, posi)[0] for posi in posis
+            ])
             
-                    
+            B1, B2, normals = compute_planes(self.V_extended, self.F_f[F_involved])
+            
+            print(posis.shape, self.V_extended[self.F_f[F_involved, 0]].shape)
+
+            Z = complex_projection(
+                B1, B2, normals, 
+                posis - self.V_extended[self.F_f[F_involved, 0]], 
+                diagonal=True
+            )
+            
+            vectors_complex = np.prod(
+                (coeffs[F_involved, :, 0] * Z[:, None] + coeffs[F_involved, :, 1]) ** indices,
+                axis=1
+            )
+            
+            vectors = B1 * vectors_complex.real[:, None] + B2 * vectors_complex.imag[:, None]
+        
+        return linear_field
+    
+    def vector_field_from_existing(self, coeffs):
+        self.initialise_field_processing()
         
         
         
+        Us = self.reconstruct_corners_from_thetas(Thetas, v_init, z_init)
+        
+        coeffs = self.reconstruct_linear_from_corners(Us, singularities)
+        
+        linear_field = self.compute_linear_field(coeffs, indices)
+        
+        return linear_field
+    
+    # def vector_field(self, singularities, indices, v_init, z_init):
+    #     self.initialise_field_processing()
+        
+    #     Thetas = self.compute_thetas(singularities, indices)
+        
+    #     Us = self.reconstruct_corners_from_thetas(Thetas, v_init, z_init)
+        
+    #     coeffs = self.reconstruct_linear_from_corners(Us, singularities)
+        
+    #     linear_field = self.compute_linear_field(coeffs, indices)
+        
+    #     return 
+
+
+
 
 Field - dictate a,b,c,d - thetas - rsconstruct U - reconstruct coefficients
