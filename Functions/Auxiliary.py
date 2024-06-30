@@ -229,7 +229,7 @@ def sample_points_and_vectors(V, F, field, num_samples=3):
                 points.append(u * V[face[0]] + v * V[face[1]] + w * V[face[2]])
                 
     points = np.array(points)
-    
+
     posis, vectors = field(points)
     
     return posis, vectors
