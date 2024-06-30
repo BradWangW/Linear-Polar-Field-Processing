@@ -20,13 +20,13 @@ class Triangle_mesh():
         
         self.B1, self.B2, self.normals = compute_planes(V, F)
         
-        self.G_V = self.compute_angle_defect(V, F, self.V_boundary)
+        self.G_V = self.compute_angle_defect()
         
     def initialise_field_processing(self):
         self.construct_extended_mesh()
         self.construct_d1_extended()
         
-    def obtain_E(F):
+    def obtain_E(self, F):
         '''
         Obtain the edge list from the face list.
         '''
@@ -37,7 +37,7 @@ class Triangle_mesh():
         
         return E
     
-    def compute_V_boundary(F):
+    def compute_V_boundary(self, F):
         # Build edge-to-face mapping
         E_to_F = defaultdict(list)
 
@@ -80,23 +80,24 @@ class Triangle_mesh():
         
         # For interior (boundary) vertices, the angle defect is 2pi - sum angles (pi - sum angles)
         boundVerticesMask = np.zeros(self.V.shape[0])
-        boundVerticesMask[self.V_boundary] = 1
+        if len(self.V_boundary) > 0:
+            boundVerticesMask[self.V_boundary] = 1
         
         G_V = (2 - boundVerticesMask) * np.pi - angles
         return G_V
       
-    def sort_neighbours(self, v, neighbours=None, extended=True):
+    def sort_neighbours(self, V, F, v, neighbours=None, extended=True):
         '''
         Sort the neighbour faces of a vertex in counter-clockwise order.
         '''
-        if extended:
-            V = self.V_extended
-            F = self.F_f
-        else:
-            V = self.V
-            F = self.F
+        # if extended:
+        #     V = self.V_extended
+        #     F = self.F_f
+        # else:
+        #     V = self.V
+        #     F = self.F
         
-        if not neighbours:
+        if neighbours is None:
             neighbours = np.any(F == v, axis=1)
             
         v1 = V[v].copy()
@@ -146,7 +147,7 @@ class Triangle_mesh():
                 V_extended.append(self.V[v])
                 
                 # Index of the extended vertex
-                index_extended = len(V_extended)
+                index_extended = len(V_extended) - 1
                 f_f.append(index_extended)
                 
                 V_map[v].append(index_extended)
@@ -156,6 +157,8 @@ class Triangle_mesh():
             
             # Add the twin edges
             E_twin[i * 3:i * 3 + 3] = np.stack([f_f, np.roll(f_f, -1)], axis=1)
+            
+        V_extended = np.array(V_extended)
             
         # Construct edge-faces
         for i, e in tqdm(enumerate(self.E), desc='Constructing edge-faces'):
@@ -200,7 +203,7 @@ class Triangle_mesh():
             neighbours = np.any(np.isin(F_f, indices_extended), axis=1)
             
             # Sort the neighbours in counter-clockwise order
-            order = self.sort_neighbours(v, neighbours, extended=True)
+            order = self.sort_neighbours(V_extended, F_f, v, neighbours, extended=True)
             indices_sorted = np.array(indices_extended)[order]
             
             # If the vertex is not on the boundary
@@ -221,7 +224,7 @@ class Triangle_mesh():
             else:
                 raise ValueError(f'Wrong number of extended vertices found for {v}: {indices_extended}.')
             
-        self.V_extended = np.array(V_extended)
+        self.V_extended = V_extended
         
         self.E_twin = E_twin
         self.E_comb = np.array(E_comb)
@@ -312,8 +315,8 @@ class Triangle_mesh():
                 else:
                     F_candidate = is_in_face(self.V_extended, self.F_f, singularity)
                     
-                    if F_candidate:
-                        F_singular.append((F_candidate[0], singularity, index))
+                    if F_candidate != None:
+                        F_singular.append((F_candidate, singularity, index))
                     else:
                         raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')
             
@@ -326,6 +329,15 @@ class Triangle_mesh():
         return Thetas
     
     def reconstruct_corners_from_thetas(self, Thetas, v_init, z_init):
+        '''
+            Reconstruct the corner values from the thetas.
+            Input:
+                Thetas: (num_E, num_singularities) array of thetas
+                v_init: initial value for the corner in the vertex face
+                z_init: initial value for the corner in the edge face
+            Output:
+                Us: (num_V_extended, num_singularities) complex array of corner values
+        '''
         Us = np.zeros((len(self.V_extended), Thetas.shape[1]), dtype=complex)
         itns = np.zeros(Thetas.shape[1])
         r1norms = np.zeros(Thetas.shape[1])
@@ -341,7 +353,7 @@ class Triangle_mesh():
             rhs = np.zeros(len(self.E_extended) + 1, dtype=complex)
             rhs[-1] = z_init / np.abs(z_init)
             
-            Us[:, i], _, itns[i], r1norms[i] = lsqr(lhs.tocsr(), rhs)
+            Us[:, i], _, itns[i], r1norms[i] = lsqr(lhs.tocsr(), rhs)[:4]
             
         print(f'Corner reconstruction iterations and residuals',
               np.stack([itns, r1norms], axis=1))
@@ -349,6 +361,14 @@ class Triangle_mesh():
         return Us
     
     def reconstruct_linear_from_corners(self, Us, singularities_F=None):
+        '''
+            Reconstruct the coefficients of the linear field from the corner values.
+            Input:
+                Us: (num_F, num_singularities) complex array of corner values
+                singularities_F: (num_singularities, 3) array of singularities in the faces
+            Output:
+                coeffs: (num_F, num_singularities, 2) complex array of coefficients for the linear fields
+        '''
         if Us.shape[1] != len(singularities_F):
             raise ValueError('The number of singularities and the number of sets of corner values do not match.')
 
@@ -361,7 +381,7 @@ class Triangle_mesh():
             U = Us[:, i]
             
             # Find the face containing the singularity
-            f_singular = is_in_face(self.V_extended, self.F_f, singularity)[0]
+            f_singular = is_in_face(self.V_extended, self.F_f, singularity)
             
             if f_singular == None:
                 raise ValueError(f'The singularity {singularity} is not in any face.')
@@ -373,7 +393,7 @@ class Triangle_mesh():
             for j, f in tqdm(enumerate(self.F_f), 
                              desc=f'Constructing the linear system for singularity {singularity}',
                              leave=False):
-                b1 = self.B1[f]; b2 = self.B2[f]; normal = self.normals[f]
+                b1 = self.B1[j][None, :]; b2 = self.B2[j][None, :]; normal = self.normals[j][None, :]
                 
                 # Compute the complex representation of the vertices on the face face
                 Zf = complex_projection(b1, b2, normal, self.V_extended[f] - self.V_extended[f[0]])[0]
@@ -414,20 +434,37 @@ class Triangle_mesh():
         
         return coeffs
     
-    def compute_linear_field(self, coeffs, indices=None):
+    def define_linear_field(self, coeffs, indices=None):
+        if coeffs.shape[1] != len(indices):
+            raise ValueError('The number of singularities and the number of sets of coefficients do not match.')
+        
         def linear_field(posis):
+
             # Find the faces where the points are located
-            F_involved = np.array([
-                is_in_face(self.V_extended, self.F_f, posi)[0] for posi in posis
-            ])
+            # For points on vertices or edges, all adjacent faces are considered
+            posis_extended = []
+            F_involved = []
+            for posi in posis:
+                f_involved = is_in_face(self.V_extended, self.F_f, posi, include_EV=True)
+
+                if len(f_involved) > 1:
+                    posis_extended += [posi] * len(f_involved)
+                    F_involved += f_involved
+                else:
+                    posis_extended.append(posi)
+                    F_involved.append(f_involved)
+
+            posis_extended = np.array(posis_extended)
+            F_involved = np.array(F_involved)
             
-            B1, B2, normals = compute_planes(self.V_extended, self.F_f[F_involved])
+            # Compute the linear field
+            B1 = self.B1[F_involved]; B2 = self.B2[F_involved]; normals = self.normals[F_involved]
             
-            print(posis.shape, self.V_extended[self.F_f[F_involved, 0]].shape)
+            print(posis_extended.shape, self.V_extended[self.F_f[F_involved, 0]][:, 0, :].shape)
 
             Z = complex_projection(
                 B1, B2, normals, 
-                posis - self.V_extended[self.F_f[F_involved, 0]], 
+                posis_extended - self.V_extended[self.F_f[F_involved, 0]][:, 0, :], 
                 diagonal=True
             )
             
@@ -437,21 +474,71 @@ class Triangle_mesh():
             )
             
             vectors = B1 * vectors_complex.real[:, None] + B2 * vectors_complex.imag[:, None]
+
+            return posis_extended, vectors
         
         return linear_field
     
-    def vector_field_from_existing(self, coeffs):
+    def vector_field_from_truth(self, coeffs_truth, singularities, indices):
+        '''
+            Field - dictate a,b,c,d - thetas - reconstruct U - reconstruct coefficients
+            Input: 
+                coeffs: (num_F, num_singularities_F, 2) complex array of coefficients for the linear fields
+            Output:
+                field: function of the reconstructed vector field
+                field_truth: function of the truth vector field
+        '''
         self.initialise_field_processing()
+
+        F_singular = []
+        singularities_F = []
+        indices_F = []
+
+        if singularities is not None:
+            for singularity, index in zip(singularities, indices):
+                # If the singularity is in a face, it contributes a set of thetas
+                F_candidate = is_in_face(self.V_extended, self.F_f, singularity)
+                print(singularity, F_candidate)
+                
+                if F_candidate is not False:
+                    F_singular.append(F_candidate)
+                    singularities_F.append(singularity)
+                    indices_F.append(index)
+
+        if coeffs_truth.shape[1] != len(singularities_F):
+            raise ValueError('The number of face singularities and the number of sets of coefficients do not match.')
+
+        U_truth = np.zeros(len(self.V_extended), dtype=complex)
+        for i, f in enumerate(self.F_f):
+            b1 = self.B1[i][None, :]; b2 = self.B2[i][None, :]; normal = self.normals[i][None, :]
+
+            V_f = self.V_extended[f]
+
+            Z_f = complex_projection(b1, b2, normal, V_f - V_f[0])[0]
+
+            # coeffs_truth[i, :, 0]: (num_singularities_F, )
+            # Z_f: (3, )
+            for j in range(3):
+                U_truth[f[j]] = np.prod(
+                    (coeffs_truth[i, :, 0] * Z_f[j] + coeffs_truth[i, :, 1]) ** indices_F
+                )
+        U_truth[U_truth != 0] = U_truth[U_truth != 0] / np.abs(U_truth[U_truth != 0])
+
+        Theta = np.zeros((len(self.E_extended), 1))
+        for i, e in enumerate(self.E_extended):
+            v1, v2 = e
+            Theta[i, 0] = np.angle(U_truth[v2]) - np.angle(U_truth[v1])
+        Theta = np.mod(Theta + np.pi, 2 * np.pi) - np.pi
+
+        Us = self.reconstruct_corners_from_thetas(Theta, 0, U_truth[0])
+
+        coeffs = self.reconstruct_linear_from_corners(Us, singularities_F)
         
+        field_truth = self.define_linear_field(coeffs, indices_F)
+
+        field = self.define_linear_field(coeffs, indices_F)
         
-        
-        Us = self.reconstruct_corners_from_thetas(Thetas, v_init, z_init)
-        
-        coeffs = self.reconstruct_linear_from_corners(Us, singularities)
-        
-        linear_field = self.compute_linear_field(coeffs, indices)
-        
-        return linear_field
+        return field_truth, field
     
     # def vector_field(self, singularities, indices, v_init, z_init):
     #     self.initialise_field_processing()
@@ -469,4 +556,3 @@ class Triangle_mesh():
 
 
 
-Field - dictate a,b,c,d - thetas - rsconstruct U - reconstruct coefficients

@@ -148,7 +148,7 @@ def find_indices(A, B):
     return np.array(indices)
  
 
-def is_in_face(V, F, posi):
+def is_in_face(V, F, posi, include_EV=False):
     '''
         Input:
             V: (N, 3) array of vertices
@@ -190,15 +190,29 @@ def is_in_face(V, F, posi):
             u = (dot11 * dot02 - dot01 * dot12) / inv_denom
             v = (dot00 * dot12 - dot01 * dot02) / inv_denom
             
-            if (u >= 0) and (v >= 0) and (u + v <= 1):
+            # If include_EV is True, the point is considered to be in the face if it is on the edge or the vertex
+            # in other words, all adjacent faces are considered
+            if include_EV:
+                bool0 = (u >= 0) and (v >= 0) and (u + v <= 1)
+            # if false, the point must be strictly inside the face
+            else:
+                bool0 = (u > 0) and (v > 0) and (u + v < 1)
+
+            if bool0:
                 candidate_faces.append(i)
         
         if len(candidate_faces) == 1:
-            return candidate_faces
+            if include_EV:
+                return candidate_faces
+            else:
+                return candidate_faces[0]
         elif len(candidate_faces) > 1:
-            raise ValueError(f'The point {posi} is in more than one face.')
+            if include_EV:
+                return candidate_faces
+            else:
+                raise ValueError(f'The point {posi} is in more than one face.')
         else:
-            raise ValueError(f'The point is {posi} not in any face.') 
+            return False
 
 
 def sample_points_and_vectors(V, F, field, num_samples=3):
@@ -216,7 +230,7 @@ def sample_points_and_vectors(V, F, field, num_samples=3):
                 
     points = np.array(points)
     
-    vectors = field(points)
+    posis, vectors = field(points)
     
-    return points, vectors
+    return posis, vectors
             
