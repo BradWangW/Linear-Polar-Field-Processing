@@ -1,15 +1,7 @@
 import numpy as np
-import scipy.linalg
 import polyscope as ps
-from scipy.sparse import lil_matrix, csr_matrix, csc_matrix, coo_matrix, linalg, bmat, diags, vstack
-from scipy.sparse.linalg import spsolve, splu, lsqr
-from tqdm import tqdm
-import os
-from contextlib import redirect_stdout, redirect_stderr
-from DAFunctions import load_off_file, compute_areas_normals, compute_laplacian, compute_mean_curvature_normal, compute_edge_list, compute_angle_defect
-from scipy.optimize import minimize
-from Auxiliary import *
-from Mesh import Triangle_mesh
+from Functions.Auxiliary import *
+from Functions.Mesh import Triangle_mesh
 
 
 # Increase the recursion limit
@@ -27,17 +19,13 @@ if __name__ == '__main__':
     ])
     singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
     indices = [1, 1]
-    # singularities = np.array([[1/3, 1/3, -1/3]])
-    # indices = [2]
-    # v_init = 10
-    # z_init = -1
 
     mesh = Triangle_mesh(V, F)
 
     coeffs_truth = np.zeros((len(F), 1, 2), dtype=complex)
 
     # Truth coefficient for the linear term
-    coeffs_truth[:, 0, 0] = 1j
+    coeffs_truth[:, 0, 0] = 2 + 3j
 
     zeros_per_face = np.array([
         [1/3, 1/3, -1/3], 

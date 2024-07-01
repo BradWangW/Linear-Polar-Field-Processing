@@ -1,13 +1,6 @@
 import numpy as np
-import scipy.linalg
-import polyscope as ps
-from scipy.sparse import lil_matrix, csr_matrix, csc_matrix, coo_matrix, linalg, bmat, diags
-from scipy.sparse.linalg import spsolve, splu, lsqr
 from tqdm import tqdm
-import os
-from contextlib import redirect_stdout, redirect_stderr
-from DAFunctions import load_off_file, compute_areas_normals, compute_laplacian, compute_mean_curvature_normal, compute_edge_list, compute_angle_defect
-from scipy.optimize import minimize
+from collections import defaultdict
 
 def accumarray(indices, values):
     '''
@@ -19,19 +12,38 @@ def accumarray(indices, values):
     np.add.at(output, indFlat, valFlat)
 
     return output
-
-def compute_G_V(V, E, F):
+        
+def obtain_E(F):
     '''
-    Compute the angle defect at each vertex.
+    Obtain the edge list from the face list.
     '''
-    _, E, edgeBoundMask, boundVertices, _, EF = compute_edge_list(V, F)
+    E = np.concatenate([
+        F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]
+    ])
+    E = np.unique(np.sort(E, axis=1), axis=0)
+    
+    return E
 
-    # vorAreas = compute_laplacian(V, F, E, edgeBoundMask, EF, onlyArea=True)
+def compute_V_boundary(F):
+    # Build edge-to-face mapping
+    E_to_F = defaultdict(list)
 
-    angleDefect = compute_angle_defect(V, F, boundVertices)
+    for index_f, f in enumerate(F):
+        for i in range(len(f)):
+            e = tuple(sorted([f[i], f[(i + 1) % len(f)]]))
+            E_to_F[e].append(index_f)
 
-    # return angleDefect / vorAreas
-    return angleDefect
+    # Identify boundary edges
+    E_boundary = []
+
+    for edge, faces in E_to_F.items():
+        if len(faces) == 1:
+            E_boundary.append(edge)
+
+    # Extract boundary vertices
+    V_boundary = np.unique(np.array(E_boundary).flatten())
+    
+    return V_boundary
 
 def compute_planes(V, F):
     ''' 
@@ -217,7 +229,8 @@ def is_in_face(V, F, posi, include_EV=False):
 
 def sample_points_and_vectors(V, F, field, num_samples=3):
     points = []
-    for face in tqdm(F, desc='Sampling points and vectors', total=len(F)):
+    for face in tqdm(F, desc='Sampling points and vectors', 
+                     total=len(F), leave=False):
         for j in range(num_samples):
             for k in range(num_samples - j - 1):
                 # Barycentric coordinates
