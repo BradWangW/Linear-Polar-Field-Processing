@@ -308,6 +308,28 @@ class Triangle_mesh():
         # Compute the set of thetas for each face singularity
         # by constrained optimisation using the KKT conditions
         Thetas = np.zeros((len(self.E_extended), len(F_singular)))
+
+        '''
+        import cvxopt
+        import numpy as np
+
+        # Define the problem data
+        P = cvxopt.matrix([[4.0, 1.0], [1.0, 2.0]])  # Positive semidefinite matrix
+        q = cvxopt.matrix([0.0, 0.0])  # Zero vector
+        A = cvxopt.matrix([[1.0, 1.0], [1.0, -1.0]])  # Equality constraint matrix
+        b = cvxopt.matrix([1.0, 0.0])  # Equality constraint vector
+
+        # Define G and h for no inequality constraints
+        G = cvxopt.matrix(np.zeros((0, 2)))  # Empty matrix with appropriate dimensions
+        h = cvxopt.matrix(np.zeros(0))  # Empty vector
+
+        # Solve the quadratic program
+        solution = cvxopt.solvers.qp(P, q, G, h, A, b)
+
+        # Extract the optimal solution
+        x_opt = solution['x']
+        print(x_opt)
+        '''
         
         return Thetas
     
