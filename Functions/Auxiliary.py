@@ -2,6 +2,18 @@ import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
 
+def load_off_file(file_path):
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+
+    # Parse the vertices and faces from the OFF file
+    num_vertices, num_faces, _ = map(int, lines[1].split())
+
+    vertices = np.array([list(map(float, line.split())) for line in lines[2:2 + num_vertices]])
+    faces = np.array([list(map(int, line.split()))[1:] for line in lines[2 + num_vertices:]])
+
+    return vertices, faces
+
 def accumarray(indices, values):
     '''
     Accumulate values into an array using the indices.
