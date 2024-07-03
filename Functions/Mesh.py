@@ -321,7 +321,10 @@ class Triangle_mesh():
         
             U = complex_projection(B1, B2, normals, vec_e[None, :])
             # print(U)
-            U[U > 0] = U[U > 0] / np.abs(U[U > 0])
+            # U[U > 0] = U[U > 0] / np.abs(U[U > 0])
+            # rotation = np.arccos(
+            #     np.real(np.conjugate(U[0]) * U[1]) / (np.abs(U[0]) * np.abs(U[1]))
+            # )
             rotation = np.angle(U[1]) - np.angle(U[0])
             # rotation = np.arccos((U[0] * np.conjugate(U[1])).real)
             # print(np.mod(rotation + np.pi, 2*np.pi) - np.pi)
@@ -403,12 +406,15 @@ class Triangle_mesh():
         c = np.zeros((len(self.E_extended) - 3) * len(self.F_singular))
         
         # Quantities for quadratic programming dependent on the singularities
-        dim_E = (
-            (len(self.F_f) + len(self.F_e) + len(self.F_v) - 2) * len(self.F_singular), 
-            (len(self.E_extended) - 3) * len(self.F_singular)
+        dim_E_block = (
+            (len(self.F_f) + len(self.F_e) + len(self.F_v) - 2), 
+            (len(self.E_extended) - 3)
         )
-        E = lil_matrix((dim_E[0], dim_E[1]), dtype=float)
-        d = np.zeros(dim_E[0])
+        E = lil_matrix(
+            (dim_E_block[0] * len(self.F_singular), dim_E_block[1] * len(self.F_singular)), 
+            dtype=float
+        )
+        d = np.zeros(dim_E_block[0] * len(self.F_singular))
         
         for i, (f_singular, singularity, index) in tqdm(enumerate(zip(self.F_singular, self.singularities_F, self.indices_F)), 
                                                desc = 'Computing thetas', 
@@ -444,7 +450,7 @@ class Triangle_mesh():
             d1_i = self.d1[mask_removed_f]
             d1_i = d1_i[:, mask_removed_E[:, i]]
             d1_i = d1_i[:-1]
-            E[dim_E[0] * i:dim_E[0] * (i + 1), dim_E[1] * i:dim_E[1] * (i + 1)] = d1_i.toarray()
+            E[dim_E_block[0] * i:dim_E_block[0] * (i + 1), dim_E_block[1] * i:dim_E_block[1] * (i + 1)] = d1_i.toarray()
             
             b1 = self.b.copy()
             # For the other edge faces involving one of the computed edges, 
@@ -462,21 +468,22 @@ class Triangle_mesh():
             
             b1 = b1[mask_removed_f]
             b1 = b1[:-1]
-            d[dim_E[0] * i:dim_E[0] * (i + 1)] = b1
+            d[dim_E_block[0] * i:dim_E_block[0] * (i + 1)] = b1
             
         # Define the system to solve the quadratic programming problem
         KKT_lhs = bmat([
             [Q, E.T],
-            [E, np.zeros((dim_E[0], dim_E[0]))]
+            [E, np.zeros((dim_E_block[0] * len(self.F_singular), dim_E_block[0] * len(self.F_singular)))]
         ], format='coo')
-        KKT_rhs = np.concatenate([c, d])
+        KKT_rhs = np.concatenate([-c, d])
         
         # Solve the quadratic programming problem
         solution, _, itn, r1norm = lsqr(KKT_lhs, KKT_rhs)[:4]
         # print(solution)
         
         # Extract the thetas
-        Thetas[mask_removed_E] = solution[:(len(self.E_extended) - 3) * len(self.F_singular)].reshape(-1, len(self.F_singular)).squeeze()
+        for i in range(len(self.F_singular)):
+            Thetas[mask_removed_E[:, i], i] = solution[i * (len(self.E_extended) - 3):(i + 1) * (len(self.E_extended) - 3)]
 
         print(f'Theta computation iteration and residual: {itn}, {r1norm}.')
 
@@ -512,7 +519,11 @@ class Triangle_mesh():
                 Us: (num_V_extended, num_singularities) complex array of corner values
         '''
         if not Thetas_include_pairface:
-            Thetas[len(self.E_twin):] += self.pair_rotations[:, None]
+            for j in range(Thetas.shape[1]):
+                Thetas[len(self.E_twin):, j] += self.pair_rotations
+                
+            # Thetas[len(self.E_twin):] += self.pair_rotations[:, None]
+            Thetas = np.mod(Thetas + np.pi, 2 * np.pi) - np.pi
             
         Us = np.zeros((len(self.V_extended), Thetas.shape[1]), dtype=complex)
         itns = np.zeros(Thetas.shape[1])
@@ -793,7 +804,7 @@ class Triangle_mesh():
                 posis_extended - self.V_extended[self.F_f[F_involved, 0]], 
                 diagonal=True
             )
-
+            
             vectors_complex = np.prod(
                 (coeffs[F_involved, :, 0] * Z[:, None] + coeffs[F_involved, :, 1]) ** indices_F[None, :],
                 axis=1
@@ -805,20 +816,21 @@ class Triangle_mesh():
         
         return linear_field
     
-    def vector_field(self, singularities, indices, v_init, z_init):
+    def vector_field(self, singularities, indices, v_init, z_init, six_eq_fit_linear=True):
         self.initialise_field_processing()
         
         Thetas = self.compute_thetas(singularities=singularities, indices=indices)
         
         Us = self.reconstruct_corners_from_thetas(Thetas, v_init, z_init)
         
-        coeffs = self.reconstruct_linear_from_corners(Us)
+        # coeffs = self.reconstruct_linear_from_corners(Us)
+        coeffs = self.reconstruct_linear_from_corners(Us, six_equations=six_eq_fit_linear)
         
         field = self.define_linear_field(coeffs)
         
         return field
     
-    def vector_field_from_truth(self, coeffs_truth, singularities, indices):
+    def vector_field_from_truth(self, coeffs_truth, singularities, indices, six_eq_fit_linear=True):
         '''
             Field - dictate a,b,c,d - thetas - reconstruct U - reconstruct coefficients
             Input: 
@@ -875,7 +887,7 @@ class Triangle_mesh():
 
         # print(np.stack([U_truth, Us[:, 0]], axis=1))
 
-        coeffs = self.reconstruct_linear_from_corners(Us, singularities_F)
+        coeffs = self.reconstruct_linear_from_corners(Us, singularities_F, six_equations=six_eq_fit_linear) 
 
         # print('Truth and reconstructed coefficients: \n', np.stack([coeffs_truth, coeffs], axis=1))
         

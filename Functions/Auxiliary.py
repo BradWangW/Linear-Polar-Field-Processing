@@ -185,10 +185,10 @@ def is_in_face(V, F, posi, include_EV=False):
     _, _, normals = compute_planes(V, F)
     
     # Filter the faces whose plane the point is in
-    is_in_plane = np.where(np.abs(np.sum(normals * (posi[np.newaxis, :] - V[F[:, 0]]), axis=1)) < 1e-15)[0]
+    is_in_plane = np.where(np.abs(np.sum(normals * (posi[np.newaxis, :] - V[F[:, 0]]), axis=1)) < 1e-6)[0]
     
     if len(is_in_plane) == 0:
-        print(np.min(np.abs(np.sum(normals * (posi[np.newaxis, :] - V[F[:, 0]]), axis=1))))
+        print('Error to the nearest face: ', np.min(np.abs(np.sum(normals * (posi[np.newaxis, :] - V[F[:, 0]]), axis=1))))
         raise ValueError(f'The point {posi} is not in any plane.')
     else:
         # Check if the point is in the triangle
