@@ -20,15 +20,6 @@ if __name__ == '__main__':
     v_init = 100
     z_init = 1
     
-    # V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
-    # singularities = np.array([
-    #     V[F[100, 0]],
-    #     0.3 * V[F[10, 0]] + 0.3 * V[F[10, 1]] + 0.4 * V[F[10, 2]]
-    # ])
-    # indices = [1, 1]
-    # v_init = 100
-    # z_init = 1
-    
     # # A minimal triangulated tetrahedron
     # V = np.array([
     #     [1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]
@@ -37,21 +28,35 @@ if __name__ == '__main__':
     #     [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
     # ])
     # singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
-    # singularities = np.array([[1, 1, 1], [-1/3, -1/3, -1/3]])
-    # singularities = np.array([[1/3, 1/3, -1/3]])
-    # singularities = np.array([[1/3, 1/3, -1/3], [-1/3, -1/3, -1/3]])
-    indices = [1, 1]
-    v_init = 0
-    z_init = 1
+    # # singularities = np.array([[1, 1, 1], [-1/3, -1/3, -1/3]])
+    # # singularities = np.array([[1/3, 1/3, -1/3]])
+    # # singularities = np.array([[1/3, 1/3, -1/3], [-1/3, -1/3, -1/3]])
+    # indices = [1, 1]
+    # v_init = 0
+    # z_init = 1
 
     mesh = Triangle_mesh(V, F)
     
-    field = mesh.vector_field(
-        singularities, indices, v_init, z_init, 
-        six_eq_fit_linear=True
-    )
+    mesh.initialise_field_processing()
     
-    posis, vectors = sample_points_and_vectors(V, F, field, num_samples=4)
+    Thetas = mesh.compute_thetas(singularities=singularities, indices=indices)
+    
+    Us = mesh.reconstruct_corners_from_thetas(Thetas, v_init, z_init)
+    
+    coeffs = mesh.reconstruct_linear_from_corners(Us, six_equations=True)
+    
+    zeros = -coeffs[:, 0, 1] / coeffs[:, 0, 0]
+    zeros_in_space = zeros.real[:, None] * mesh.B1 + zeros.imag[:, None] * mesh.B2 + \
+        mesh.V[mesh.F[:, 0]]
+    
+    for i, zero in enumerate(zeros_in_space):
+        F_candidate = is_in_face(V, F, zero, include_EV=True)
+        if F_candidate is not False:
+            print(i, F_candidate)
+
+    field = mesh.define_linear_field(coeffs)
+    
+    posis, vectors = sample_points_and_vectors(V, F, field, num_samples=25)
     
     vectors /= np.linalg.norm(vectors, axis=1)[:, None]
 

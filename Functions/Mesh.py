@@ -823,7 +823,6 @@ class Triangle_mesh():
         
         Us = self.reconstruct_corners_from_thetas(Thetas, v_init, z_init)
         
-        # coeffs = self.reconstruct_linear_from_corners(Us)
         coeffs = self.reconstruct_linear_from_corners(Us, six_equations=six_eq_fit_linear)
         
         field = self.define_linear_field(coeffs)
