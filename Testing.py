@@ -18,7 +18,7 @@ if __name__ == '__main__':
     ])
     indices = [1, 1]
     v_init = 100
-    z_init = 1
+    z_init = 1+1j
     
     # # A minimal triangulated tetrahedron
     # V = np.array([
@@ -43,7 +43,7 @@ if __name__ == '__main__':
     
     Us = mesh.reconstruct_corners_from_thetas(Thetas, v_init, z_init)
     
-    coeffs = mesh.reconstruct_linear_from_corners(Us, six_equations=True)
+    coeffs = mesh.reconstruct_linear_from_corners(Us, six_equations=False)
     
     zeros = -coeffs[:, 0, 1] / coeffs[:, 0, 0]
     zeros_in_space = zeros.real[:, None] * mesh.B1 + zeros.imag[:, None] * mesh.B2 + \
@@ -56,7 +56,7 @@ if __name__ == '__main__':
 
     field = mesh.define_linear_field(coeffs)
     
-    posis, vectors = sample_points_and_vectors(V, F, field, num_samples=25)
+    posis, vectors = sample_points_and_vectors(V, F, field, num_samples=6)
     
     vectors /= np.linalg.norm(vectors, axis=1)[:, None]
 

@@ -304,7 +304,10 @@ class Triangle_mesh():
         pair_rotations = np.zeros(self.E_comb.shape[0])
         
         # The ith element in F_e and E represent the same edge
-        for f_e in self.F_e:
+        for f_e in tqdm(self.F_e, 
+                        desc='Computing face pair rotations', 
+                        total=len(self.F_e), 
+                        leave=False):
             # Recall each f_e is formed as v1 -> v2 -> v2 -> v1
             # so that v1 -> v2 is a twin edge and v1 -> v1 is a combinatorial edge
             e1_comb = np.all(np.sort(self.E_comb, axis=1) == np.sort(f_e[[0, 3]]), axis=1)
@@ -407,7 +410,7 @@ class Triangle_mesh():
         
         # Quantities for quadratic programming dependent on the singularities
         dim_E_block = (
-            (len(self.F_f) + len(self.F_e) + len(self.F_v) - 2), 
+            (len(self.F_f) + len(self.F_e) + len(self.F_v) - 1), 
             (len(self.E_extended) - 3)
         )
         E = lil_matrix(
@@ -449,7 +452,7 @@ class Triangle_mesh():
             
             d1_i = self.d1[mask_removed_f]
             d1_i = d1_i[:, mask_removed_E[:, i]]
-            d1_i = d1_i[:-1]
+            # d1_i = d1_i[:-1]
             E[dim_E_block[0] * i:dim_E_block[0] * (i + 1), dim_E_block[1] * i:dim_E_block[1] * (i + 1)] = d1_i.toarray()
             
             b1 = self.b.copy()
@@ -467,7 +470,7 @@ class Triangle_mesh():
                 b1[f_involved] = affect_in_d1 * rotations[j]
             
             b1 = b1[mask_removed_f]
-            b1 = b1[:-1]
+            # b1 = b1[:-1]
             d[dim_E_block[0] * i:dim_E_block[0] * (i + 1)] = b1
             
         # Define the system to solve the quadratic programming problem
@@ -541,9 +544,6 @@ class Triangle_mesh():
             rhs[-1] = z_init / np.abs(z_init)
             
             Us[:, i], _, itns[i], r1norms[i] = lsqr(lhs.tocsr(), rhs)[:4]
-            
-        Us.real[np.abs(Us.real) < 1e-15] = 0
-        Us.imag[np.abs(Us.imag) < 1e-15] = 0
             
         print(f'Corner reconstruction iterations and residuals',
               np.stack([itns, r1norms], axis=1))
@@ -647,8 +647,8 @@ class Triangle_mesh():
 
                 else:
                     #-------------------------------------------------------------------------# 
-                    # Corners by Re(az+b) + Im(az+b) = Re(u) + Im(u)
-                    # Centre by Re(az+b)Im(u) = Im(az+b)Re(u)
+                    # Corners by Re(az+b)Im(u) = Im(az+b)Re(u)
+                    # No more information is given
 
                     # If the face is singular, the last row explicitly specifies 
                     # the singularity (zero point of the field)
@@ -657,33 +657,70 @@ class Triangle_mesh():
                             b1, b2, normal, 
                             np.array([singularity - self.V_extended[f[0]]])
                         )[0, 0]
-                        first_row = [0, 0, 1, 0]
-                        first_element = Uf[0].real
-                        last_row = [zc.real + zc.imag, zc.real - zc.imag, 1, 1]
-                        last_element = 0
+                            
+                        lhs[4*j:4*(j+1), 4*j:4*(j+1)] = np.array([
+                            [zc.real, -zc.imag, 1, 0],
+                            [zc.imag, zc.real, 0, 1],
+                            [Zf[0].real, -Zf[0].imag, 1, 0],
+                            [Zf[0].imag, Zf[0].real, 0, 1]
+                        ], dtype=float)
+                        
+                        rhs[4*j:4*(j+1)] = [
+                            0, 0, Uf[0].real, Uf[0].imag
+                        ]
                     # If the face is not singular, the last row aligns the first corner 
                     # value up to +-sign and scale, as for the other two corners
                     else:
-                        first_row = [Zf[0].real + Zf[0].imag, Zf[0].real - Zf[0].imag, 1, 1]
-                        first_element = Uf[0].real + Uf[0].imag
-                        last_row = [
-                            centre_prod.imag, centre_prod.real, -centre_u.imag, centre_u.real
-                            ]
-                        last_element = 0
+                        lhs[4*j:4*(j+1), 4*j:4*(j+1)] = np.array([
+                            [prod[0].imag, prod[0].real, -Uf[0].imag, Uf[0].real],
+                            [prod[1].imag, prod[1].real, -Uf[1].imag, Uf[1].real],
+                            [Zf[0].real, -Zf[0].imag, 1, 0],
+                            [Zf[0].imag, Zf[0].real, 0, 1]
+                        ], dtype=float)
+                        
+                        rhs[4*j:4*(j+1)] = [
+                            0, 0, Uf[0].real, Uf[0].imag
+                        ]
+                    #-------------------------------------------------------------------------#
+                    
+                    #-------------------------------------------------------------------------# 
+                    # # Corners by Re(az+b) + Im(az+b) = Re(u) + Im(u)
+                    # # Centre by Re(az+b)Im(u) = Im(az+b)Re(u)
 
-                    # Construct the linear system (blocks of 4x4 in the matrix)
-                    lhs[4*j:4*(j+1), 4*j:4*(j+1)] = np.array([
-                        first_row,
-                        [Zf[1].real + Zf[1].imag, Zf[1].real - Zf[1].imag, 1, 1],
-                        [Zf[2].real + Zf[2].imag, Zf[2].real - Zf[2].imag, 1, 1],
-                        last_row
-                    ], dtype=float)
-                    rhs[4*j:4*(j+1)] = [
-                        first_element,
-                        Uf[1].real + Uf[1].imag,
-                        Uf[2].real + Uf[2].imag,
-                        last_element
-                    ]
+                    # # If the face is singular, the last row explicitly specifies 
+                    # # the singularity (zero point of the field)
+                    # if j == f_singular:
+                    #     zc = complex_projection(
+                    #         b1, b2, normal, 
+                    #         np.array([singularity - self.V_extended[f[0]]])
+                    #     )[0, 0]
+                    #     first_row = [0, 0, 1, 0]
+                    #     first_element = Uf[0].real
+                    #     last_row = [zc.real + zc.imag, zc.real - zc.imag, 1, 1]
+                    #     last_element = 0
+                    # # If the face is not singular, the last row aligns the first corner 
+                    # # value up to +-sign and scale, as for the other two corners
+                    # else:
+                    #     first_row = [Zf[0].real + Zf[0].imag, Zf[0].real - Zf[0].imag, 1, 1]
+                    #     first_element = Uf[0].real + Uf[0].imag
+                    #     last_row = [
+                    #         centre_prod.imag, centre_prod.real, -centre_u.imag, centre_u.real
+                    #         ]
+                    #     last_element = 0
+
+                    # # Construct the linear system (blocks of 4x4 in the matrix)
+                    # lhs[4*j:4*(j+1), 4*j:4*(j+1)] = np.array([
+                    #     first_row,
+                    #     [Zf[1].real + Zf[1].imag, Zf[1].real - Zf[1].imag, 1, 1],
+                    #     [Zf[2].real + Zf[2].imag, Zf[2].real - Zf[2].imag, 1, 1],
+                    #     last_row
+                    # ], dtype=float)
+                    # rhs[4*j:4*(j+1)] = [
+                    #     first_element,
+                    #     Uf[1].real + Uf[1].imag,
+                    #     Uf[2].real + Uf[2].imag,
+                    #     last_element
+                    # ]
                     #-------------------------------------------------------------------------#
 
                     #-------------------------------------------------------------------------#
@@ -754,7 +791,7 @@ class Triangle_mesh():
             
             coeffs[:, i, 0] = result[:, 0] + 1j * result[:, 1]
             coeffs[:, i, 1] = result[:, 2] + 1j * result[:, 3]
-        
+
         print(f'Linear field reconstruction iterations and residuals',
               np.stack([itns, r1norms], axis=1))
         
