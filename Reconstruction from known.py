@@ -22,10 +22,10 @@ if __name__ == '__main__':
 
     mesh = Triangle_mesh(V, F)
 
-    coeffs_truth = np.zeros((len(F), 1, 2), dtype=complex)
+    coeffs_truth = np.zeros((len(F), 2), dtype=complex)
 
     # Truth coefficient for the linear term
-    coeffs_truth[:, 0, 0] = 1+1j
+    coeffs_truth[:, 0] = 1+1j
 
     zeros_per_face = np.array([
         [1/3, 1/3, -1/3], 
@@ -38,16 +38,15 @@ if __name__ == '__main__':
         mesh.B1, mesh.B2, mesh.normals, zeros_per_face - V[F[:, 0]], diagonal=True
     )
 
-    coeffs_truth[:, 0, 1] = -coeffs_truth[:, 0, 0] * Z_zero_per_face
+    coeffs_truth[:, 1] = -coeffs_truth[:, 0] * Z_zero_per_face
 
     # Compute the fields
     field_truth, field = mesh.vector_field_from_truth(
-        coeffs_truth, singularities, indices,
-        six_eq_fit_linear=False
+        coeffs_truth, singularities, indices
     )
 
-    points_truth, vectors_truth = sample_points_and_vectors(V, F, field_truth, num_samples=25)
-    points, vectors = sample_points_and_vectors(V, F, field, num_samples=25)
+    points_truth, vectors_truth = mesh.sample_points_and_vectors(field_truth, num_samples=25)
+    points, vectors = mesh.sample_points_and_vectors(field, num_samples=25)
 
     # raise ValueError
 

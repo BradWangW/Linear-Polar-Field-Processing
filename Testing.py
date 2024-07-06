@@ -18,7 +18,7 @@ if __name__ == '__main__':
     ])
     indices = [1, 1]
     v_init = 100
-    z_init = 1+1j
+    z_init = 1
     
     # # A minimal triangulated tetrahedron
     # V = np.array([
@@ -36,37 +36,45 @@ if __name__ == '__main__':
     # z_init = 1
 
     mesh = Triangle_mesh(V, F)
-    
-    mesh.initialise_field_processing()
-    
-    Thetas = mesh.compute_thetas(singularities=singularities, indices=indices)
-    
-    Us = mesh.reconstruct_corners_from_thetas(Thetas, v_init, z_init)
-    
-    coeffs = mesh.reconstruct_linear_from_corners(Us, six_equations=False)
-    
-    zeros = -coeffs[:, 0, 1] / coeffs[:, 0, 0]
-    zeros_in_space = zeros.real[:, None] * mesh.B1 + zeros.imag[:, None] * mesh.B2 + \
-        mesh.V[mesh.F[:, 0]]
-    
-    for i, zero in enumerate(zeros_in_space):
-        F_candidate = is_in_face(V, F, zero, include_EV=True)
-        if F_candidate is not False:
-            print(i, F_candidate)
 
-    field = mesh.define_linear_field(coeffs)
     
-    posis, vectors = sample_points_and_vectors(V, F, field, num_samples=6)
+    linear_field = mesh.vector_field(
+        singularities, [1, 1], v_init, z_init
+    )
+    
+    linear_conj_field = mesh.vector_field(
+        singularities, [1, 1], v_init, z_init, 
+        conj=True
+    )
+    
+    posis, vectors = mesh.sample_points_and_vectors(
+        linear_field, num_samples=3
+    )
+    posis_conj, vectors_conj = mesh.sample_points_and_vectors(
+        linear_conj_field, num_samples=3
+    )
+    
+    V_truth = V.copy()
+    V_truth[:, [0, 2]] += 0.7
+    posis_conj[:, [0, 2]] += 0.7
+    singularities_truth = singularities.copy()
+    singularities_truth[:, [0, 2]] += 0.7
     
     vectors /= np.linalg.norm(vectors, axis=1)[:, None]
-
+    vectors_conj /= np.linalg.norm(vectors_conj, axis=1)[:, None]
+    
     ps.init()
+    ps_mesh_truth = ps.register_surface_mesh("Conj Mesh", V_truth, F)
     ps_mesh = ps.register_surface_mesh("Input Mesh", V, F)
 
-    ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True, radius=0)
-    ps_field.add_vector_quantity('Field', vectors, enabled=True)
+    ps_field_truth = ps.register_point_cloud("Centroids_conj", posis_conj, enabled=True, radius=0)
+    ps_field_truth.add_vector_quantity('Samples_conj', vectors_conj, enabled=True)
+
+    ps_field = ps.register_point_cloud("Centroids", posis, enabled=True, radius=0)
+    ps_field.add_vector_quantity('Samples', vectors, enabled=True)
     
     ps.register_point_cloud("singularity marker", singularities, enabled=True)
+    ps.register_point_cloud("singularity_conj marker", singularities_truth, enabled=True)
 
     ps.show()
             

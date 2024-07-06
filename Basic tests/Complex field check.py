@@ -4,8 +4,7 @@ import matplotlib.pyplot as plt
 # Define the complex function f(z) = (z + 1 + i) / (z - 1 - i)
 def f(z):
     # return (z + 1 + 1j) *  1/((z - 1 - 1j))
-    return (z+1)**(-1)
-
+    return (1j* z+1) * (-1j * z+1)
 
 N = 30
 
@@ -32,7 +31,7 @@ plt.quiver(X, Y, U, V, color='b')
 # Add labels and title
 plt.xlabel('Real part')
 plt.ylabel('Imaginary part')
-plt.title('Vector Field for f(z) = (z + 1 + i) / (z - 1 - i)')
+plt.title('Vector Field')
 plt.axhline(0, color='black',linewidth=0.5)
 plt.axvline(0, color='black',linewidth=0.5)
 plt.grid(True)

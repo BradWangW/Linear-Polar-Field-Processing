@@ -238,25 +238,4 @@ def is_in_face(V, F, posi, include_EV=False):
                 raise ValueError(f'The point {posi} is in more than one face.')
         else:
             return False
-
-
-def sample_points_and_vectors(V, F, field, num_samples=3):
-    points = []
-    for face in tqdm(F, desc='Sampling points and vectors', 
-                     total=len(F), leave=False):
-        for j in range(num_samples):
-            for k in range(num_samples - j - 1):
-                # Barycentric coordinates
-                u = (j+1) / (num_samples + 1)
-                v = (k+1) / (num_samples + 1)
-                w = 1 - u - v
-                
-                # Interpolate to get the 3D point in the face
-                points.append(u * V[face[0]] + v * V[face[1]] + w * V[face[2]])
-                
-    points = np.array(points)
-
-    posis, vectors = field(points)
-    
-    return posis, vectors
             

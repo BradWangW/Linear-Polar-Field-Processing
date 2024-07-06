@@ -13,16 +13,14 @@ if __name__ == '__main__':
     
     # V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
     # singularities = np.array([
-    #     0.3 * V[F[0, 0]] + 0.3 * V[F[0, 1]] + 0.4 * V[F[0, 2]],
-    #     V[F[10, 0]], 
-    #     V[F[100, 0]], 
-    #     V[F[200, 0]]
+    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+    #     0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]]
     # ])
-    # indices = [1, 1, -1, 1]
+    # indices = [1, 1]
     # v_init = 10
     # z_init = 1j
     
-    # V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
+    # V, F = load_off_file(os.path.join('..', 'data', '3holes.off'))
     # singularities = np.array([
     #     V[F[100, 0]],
     #     0.3 * V[F[10, 0]] + 0.3 * V[F[10, 1]] + 0.4 * V[F[10, 2]]
@@ -47,10 +45,13 @@ if __name__ == '__main__':
     F = np.array([
         [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
     ])
-    singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
+    # singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
     # singularities = np.array([[1, 1, 1], [-1/3, -1/3, -1/3]])
     # singularities = np.array([[1/3, 1/3, -1/3]])
-    # singularities = np.array([[1/3, 1/3, -1/3], [-1/3, -1/3, -1/3]])
+    singularities = np.array([
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]]
+    ])
     indices = [1, 1]
     v_init = 0
     z_init = 1
@@ -61,8 +62,8 @@ if __name__ == '__main__':
         singularities, indices, v_init, z_init
     )
     
-    posis, vectors = sample_points_and_vectors(
-        V, F, field, num_samples=25
+    posis, vectors = mesh.sample_points_and_vectors(
+        field, num_samples=25, margin=0.03
         )
     
     vectors /= np.linalg.norm(vectors, axis=1)[:, None]
