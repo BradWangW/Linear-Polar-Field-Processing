@@ -11,14 +11,16 @@ np.set_printoptions(threshold=np.inf)
 
 if __name__ == '__main__':
     
-    # V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
-    # singularities = np.array([
-    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-    #     0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]]
-    # ])
-    # indices = [1, 1]
-    # v_init = 10
-    # z_init = 1j
+    V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
+    singularities = np.array([
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]], 
+        0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
+        0.6 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.2 * V[F[100, 2]]
+    ])
+    indices = [1, -1, 1, 1]
+    v_init = 10
+    z_init = 1j
     
     # V, F = load_off_file(os.path.join('..', 'data', '3holes.off'))
     # singularities = np.array([
@@ -39,34 +41,38 @@ if __name__ == '__main__':
     # z_init = 1
     
     # A minimal triangulated tetrahedron
-    V = np.array([
-        [1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]
-    ], dtype=float)
-    F = np.array([
-        [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
-    ])
-    # singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
-    # singularities = np.array([[1, 1, 1], [-1/3, -1/3, -1/3]])
-    # singularities = np.array([[1/3, 1/3, -1/3]])
-    singularities = np.array([
-        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-        0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]]
-    ])
-    indices = [1, 1]
-    v_init = 0
-    z_init = 1
+    # V = np.array([
+    #     [1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]
+    # ], dtype=float)
+    # F = np.array([
+    #     [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
+    # ])
+    # # singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
+    # # singularities = np.array([[1, 1, 1], [-1/3, -1/3, -1/3]])
+    # # singularities = np.array([[1/3, 1/3, -1/3]])
+    # singularities = np.array([
+    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+    #     0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]],
+    #     0.2 * V[F[0, 0]] + 0.6 * V[F[0, 1]] + 0.2 * V[F[0, 2]],
+    #     0.33 * V[F[0, 0]] + 0.33 * V[F[0, 1]] + 0.34 * V[F[0, 2]]
+    # ])
+    # indices = [1, 1, 1, -1]
+    # v_init = 0
+    # z_init = 1
 
     mesh = Triangle_mesh(V, F)
+    
+    mesh.initialise_field_processing()
     
     field = mesh.vector_field(
         singularities, indices, v_init, z_init
     )
     
     posis, vectors = mesh.sample_points_and_vectors(
-        field, num_samples=25, margin=0.03
+        field, num_samples=3, margin=0.15, singular_detail=True
         )
     
-    vectors /= np.linalg.norm(vectors, axis=1)[:, None]
+    # vectors /= np.linalg.norm(vectors, axis=1)[:, None]
 
     ps.init()
     ps_mesh = ps.register_surface_mesh("Input Mesh", V, F)
