@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 # Define the complex function f(z) = (z + 1 + i) / (z - 1 - i)
 def f(z):
     # return (z + 1 + 1j) *  1/((z - 1 - 1j))
-    return (1j* z+1) * (-1j * z+1)
+    return (5j+1) * z
 
 N = 30
 

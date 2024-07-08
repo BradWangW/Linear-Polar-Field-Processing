@@ -11,33 +11,33 @@ np.set_printoptions(threshold=np.inf)
 
 if __name__ == '__main__':
     
-    V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
+    # V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
+    # # singularities = np.array([
+    # #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+    # #     0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]], 
+    # #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
+    # #     0.6 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.2 * V[F[100, 2]]
+    # # ])
     # singularities = np.array([
     #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
     #     0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]], 
-    #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
-    #     0.6 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.2 * V[F[100, 2]]
-    # ])
-    singularities = np.array([
-        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-        0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]], 
-        0.2 * V[F[0, 0]] + 0.6 * V[F[0, 1]] + 0.2 * V[F[0, 2]],
-        0.33 * V[F[0, 0]] + 0.33 * V[F[0, 1]] + 0.34 * V[F[0, 2]]
-    ])
-    indices = [1, -1, 1, 1]
-    v_init = 10
-    z_init = 1j
-    
-    # V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
-    # singularities = np.array([
-    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-    #     0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]], 
-    #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
-    #     0.6 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.2 * V[F[100, 2]]
+    #     0.2 * V[F[0, 0]] + 0.6 * V[F[0, 1]] + 0.2 * V[F[0, 2]],
+    #     0.33 * V[F[0, 0]] + 0.33 * V[F[0, 1]] + 0.34 * V[F[0, 2]]
     # ])
     # indices = [1, -1, 1, 1]
     # v_init = 10
     # z_init = 1j
+    
+    V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
+    singularities = np.array([
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]], 
+        0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
+        0.6 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.2 * V[F[100, 2]]
+    ])
+    indices = [1, -1, 1, 1]
+    v_init = 10
+    z_init = 1j
     
     # V, F = load_off_file(os.path.join('..', 'data', 'cow.off'))
     # singularities = np.array([
@@ -79,7 +79,7 @@ if __name__ == '__main__':
     )
     
     posis, vectors = mesh.sample_points_and_vectors(
-        field, num_samples=4, margin=0.15, singular_detail=True
+        field, num_samples=3, margin=0.15, singular_detail=True
         )
     
     vectors /= np.linalg.norm(vectors, axis=1)[:, None]
