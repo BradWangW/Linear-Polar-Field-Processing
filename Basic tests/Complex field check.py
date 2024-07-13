@@ -1,41 +1,76 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
 
-# Define the complex function f(z) = (z + 1 + i) / (z - 1 - i)
-def f(z):
-    # return (z + 1 + 1j) *  1/((z - 1 - 1j))
-    return (5j+1) * z
+# Define the complex vector field function
+def f(z, a, r, t):
+    b = a * r * np.exp(1j * t)
+    return a * z + b * np.conj(z)
 
-N = 30
+# Generate the grid of points
+num_directions = 30  # Number of polar axes directions
+num_points = 5  # Number of points per axis
 
-# Create a grid of points in the complex plane
-x = np.linspace(-3, 3, N)
-y = np.linspace(-3, 3, N)
-X, Y = np.meshgrid(x, y)
+# Generate points in polar coordinates
+angles = np.linspace(0, 2 * np.pi, num_directions, endpoint=False)
+radii = np.linspace(0.1, 2, num_points)  # Avoiding the origin to prevent singularity
+
+# Convert polar coordinates to Cartesian coordinates
+X = []
+Y = []
+for angle in angles:
+    X.extend(radii * np.cos(angle))
+    Y.extend(radii * np.sin(angle))
+
+X = np.array(X)
+Y = np.array(Y)
 Z = X + 1j * Y
 
-# Calculate the function values at each point on the grid
-F = f(Z)
+# Parameters
+a = 1 + 1j  # Example complex number for a
+r = 1.0
+t = 0.0
 
-# Normalise as we are only interested in the direction of the vectors
+# Normalise the field
+F = f(Z, a, r, t)
 F = F / np.abs(F)
 
-# Extract the real and imaginary parts
+# Calculate the initial vector field
 U = np.real(F)
 V = np.imag(F)
 
-# Plot the vector field using quiver
-plt.figure(figsize=(8, 8))
-plt.quiver(X, Y, U, V, color='b')
+# Create the plot
+fig, ax = plt.subplots()
+q = ax.quiver(X, Y, U, V)
+ax.set_title('Complex Vector Field f(z) = az + b conj(z) where b = a r exp(i t)')
+ax.set_xlabel('Re(z)')
+ax.set_ylabel('Im(z)')
 
-# Add labels and title
-plt.xlabel('Real part')
-plt.ylabel('Imaginary part')
-plt.title('Vector Field')
-plt.axhline(0, color='black',linewidth=0.5)
-plt.axvline(0, color='black',linewidth=0.5)
-plt.grid(True)
-plt.gca().set_aspect('equal', adjustable='box')
+# Adjust the subplots region to leave some space for the sliders
+plt.subplots_adjust(left=0.1, bottom=0.25)
 
-# Show the plot
+# Add sliders for r and t
+ax_r = plt.axes([0.1, 0.1, 0.65, 0.03])
+ax_t = plt.axes([0.1, 0.05, 0.65, 0.03])
+
+slider_r = Slider(ax_r, 'r', 0.1, 5.0, valinit=r)
+slider_t = Slider(ax_t, 't', 0.0, 2 * np.pi, valinit=t)
+
+# Update function to be called when sliders are changed
+def update(val):
+    r = slider_r.val
+    t = slider_t.val
+    
+    F = f(Z, a, r, t)
+    F = F / np.abs(F)
+    
+    U = np.real(F)
+    V = np.imag(F)
+    q.set_UVC(U, V)
+    fig.canvas.draw_idle()
+
+# Connect the update function to the sliders
+slider_r.on_changed(update)
+slider_t.on_changed(update)
+
 plt.show()
