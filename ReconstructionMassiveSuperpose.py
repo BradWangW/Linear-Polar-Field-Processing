@@ -1,7 +1,7 @@
 import numpy as np
 import polyscope as ps
 from Functions.Auxiliary import *
-from Functions.Mesh import Triangle_mesh
+from Functions.MeshMassiveSuperpose import Triangle_mesh
 import os
 
 
@@ -12,19 +12,30 @@ np.set_printoptions(threshold=np.inf)
 if __name__ == '__main__':
     
     V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
+    E = obtain_E(F)
     # singularities = np.array([
     #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
     #     0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]], 
     #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
     #     0.6 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.2 * V[F[100, 2]]
     # ])
+    # singularities = np.array([
+    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+    #     0.6 * V[F[1, 0]] + 0.2 * V[F[1, 1]] + 0.2 * V[F[1, 2]], 
+    #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
+    #     0.6 * V[F[101, 0]] + 0.2 * V[F[101, 1]] + 0.2 * V[F[101, 2]]
+    # ])
     singularities = np.array([
         0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-        0.6 * V[F[1, 0]] + 0.2 * V[F[1, 1]] + 0.2 * V[F[1, 2]], 
-        0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
-        0.6 * V[F[101, 0]] + 0.2 * V[F[101, 1]] + 0.2 * V[F[101, 2]]
-    ])
-    indices = [1, -1, 1, 1]
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]], 
+        V[E[100, 0]]
+    ])    
+    # singularities = np.array([
+    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]], 
+    #     V[E[100, 0]]
+    # ])
+    indices = [1, 1, 1, -1]
     v_init = 10
     z_init = 1j
     
@@ -79,7 +90,7 @@ if __name__ == '__main__':
     )
     
     posis, vectors = mesh.sample_points_and_vectors(
-        field, num_samples=7, margin=0.05, singular_detail=True
+        field, num_samples=3, margin=0.15, singular_detail=True
         )
     
     vectors /= np.linalg.norm(vectors, axis=1)[:, None]

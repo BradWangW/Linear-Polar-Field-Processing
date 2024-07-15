@@ -221,7 +221,7 @@ def is_in_face(V, F, posi, include_EV=False):
                 bool0 = (u >= 0) and (v >= 0) and (u + v <= 1)
             # if false, the point must be strictly inside the face
             else:
-                bool0 = (u > 0) and (v > 0) and (u + v < 1)
+                bool0 = (u > 1e-6) and (v > 1e-6) and (u + v < 1 - 1e-6)
 
             if bool0:
                 candidate_faces.append(i)

@@ -13,7 +13,7 @@ num_points = 5  # Number of points per axis
 
 # Generate points in polar coordinates
 angles = np.linspace(0, 2 * np.pi, num_directions, endpoint=False)
-radii = np.linspace(0.1, 2, num_points)  # Avoiding the origin to prevent singularity
+radii = np.linspace(0.3, 2, num_points)  # Avoiding the origin to prevent singularity
 
 # Convert polar coordinates to Cartesian coordinates
 X = []

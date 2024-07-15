@@ -1,36 +1,66 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
 
 # Define the complex vector field function
-def complex_vector_field(z):
-    return (z - 1) * (z + 1)**(-1)
+def f(z, r, t):
+    return z ** r
 
-# Create a grid of points in the complex plane
-x = np.linspace(-3, 3, 30)
-y = np.linspace(-3, 3, 30)
-X, Y = np.meshgrid(x, y)
+# Generate the grid of points
+num_coor = 30  # Number of axes directions
+
+X = np.linspace(-5, 5, num_coor)
+Y = np.linspace(-5, 5, num_coor)
+
+X, Y = np.meshgrid(X, Y)    
 Z = X + 1j * Y
 
-# Parameters for the complex vector field
-a = 1 + 1j
-b = 0.5 - 0.5j
-c = 0.1 + 0.1j
+# Parameters
+a = 1 + 1j  # Example complex number for a
+r = 1.0
+t = 0.0
 
-# Compute the vector field at each point in the grid
-F = complex_vector_field(Z)
-F = F/np.abs(F)
+# Normalise the field
+F = f(Z, r, t)
+F = F / np.abs(F)
 
-# Separate the vector field into real and imaginary parts for plotting
+# Calculate the initial vector field
 U = np.real(F)
 V = np.imag(F)
 
-# Plot the vector field using quiver
-plt.figure(figsize=(8, 8))
-plt.quiver(X, Y, U, V, color='blue')
-plt.xlabel('Re(z)')
-plt.ylabel('Im(z)')
-plt.title('Complex Vector Field $f(z) = az + b\overline{z} + c$')
-plt.grid()
-plt.axhline(0, color='black',linewidth=0.5)
-plt.axvline(0, color='black',linewidth=0.5)
+# Create the plot
+fig, ax = plt.subplots()
+q = ax.quiver(X, Y, U, V)
+ax.set_title('Complex Vector Field f(z) = az + b conj(z) where b = a r exp(i t)')
+ax.set_xlabel('Re(z)')
+ax.set_ylabel('Im(z)')
+
+# Adjust the subplots region to leave some space for the sliders
+plt.subplots_adjust(left=0.1, bottom=0.25)
+
+# Add sliders for r and t
+ax_r = plt.axes([0.1, 0.1, 0.65, 0.03])
+ax_t = plt.axes([0.1, 0.05, 0.65, 0.03])
+
+slider_r = Slider(ax_r, 'r', 0.1, 10.0, valinit=r)
+slider_t = Slider(ax_t, 't', 0.0, 2 * np.pi, valinit=t)
+
+# Update function to be called when sliders are changed
+def update(val):
+    r = slider_r.val
+    t = slider_t.val
+    
+    F = f(Z, r, t)
+    F = F / np.abs(F)
+    
+    U = np.real(F)
+    V = np.imag(F)
+    q.set_UVC(U, V)
+    fig.canvas.draw_idle()
+
+# Connect the update function to the sliders
+slider_r.on_changed(update)
+slider_t.on_changed(update)
+
 plt.show()
+
