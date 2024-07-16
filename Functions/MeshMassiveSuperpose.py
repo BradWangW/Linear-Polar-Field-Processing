@@ -378,28 +378,32 @@ class Triangle_mesh():
                                        total=len(singularities), 
                                        leave=False):
             
-            # Check if the singularity is in an edge or vertex
-            vec1 = self.V_extended[self.F_e[:, 0]] - singularity[None, :]
-            vec2 = self.V_extended[self.F_e[:, 1]] - singularity[None, :]
-            vec1 = vec1 / np.linalg.norm(vec1, axis=1)[:, None]
-            vec2 = vec2 / np.linalg.norm(vec2, axis=1)[:, None]
-            in_F_e = np.where(np.all(
-                np.abs(vec1 + vec2) < 1e-6,
-                axis=1
-            ))[0]
-            
+            # Check if the singularity is in a vertex
             in_F_v = np.where(np.all(
                 self.V_extended[[f_v[0] for f_v in self.F_v]] == singularity,
                 axis=1
             ))[0]
             
+            # Check if the singularity is in an edge
+            vec1 = self.V_extended[self.F_e[:, 0]] - singularity[None, :]
+            vec2 = self.V_extended[self.F_e[:, 1]] - singularity[None, :]
+            dot = np.einsum('ij,ij->i', vec1, vec2)
+            obtuse = dot < 0
+            parallel = np.isclose(
+                np.abs(dot), np.linalg.norm(vec1, axis=1) * np.linalg.norm(vec2, axis=1)
+            )
+            in_F_e = np.where(parallel * obtuse)[0]
+            
+            # Check if the singularity is in a face
             in_F_f = is_in_face(self.V_extended, self.F_f, singularity)
             
-            # If the singularity is in an edge or vertex, assign the index
-            if np.any(in_F_e):
-                self.I_F[in_F_e + len(self.F_f)] = index
-            elif np.any(in_F_v):
-                self.I_F[in_F_v + len(self.F_f) + len(self.F_e)] = index
+            # If the singularity is in a vertex, assign the index
+            if len(in_F_v) == 1:
+                self.I_F[in_F_v[0] + len(self.F_f) + len(self.F_e)] = index
+                
+            # If the singularity is in an edge, it gives the thetas for the incident faces
+            elif len(in_F_e) == 1:
+                self.I_F[in_F_e[0] + len(self.F_f)] = index
                 
             # If the singularity is in a face, it gives thetas for the face
             elif in_F_f is not False:
@@ -446,8 +450,6 @@ class Triangle_mesh():
                 
             else:
                 raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')
-            
-        
                 
         # Independent quantities for quadratic programming
         Q = eye(np.sum(mask_removed_e), format='coo')
