@@ -298,10 +298,10 @@ def compute_unfolded_vertex(a, b, c, d):
     
     # Choose the rotation that doesn't overlap
     # Compute the distance from d_prime to the plane (a, b, c)
-    distance1 = np.abs(np.dot(d_prime1 - a, n1))
-    distance2 = np.abs(np.dot(d_prime2 - a, n1))
+    distance1 = np.linalg.norm(d_prime1 - a)
+    distance2 = np.linalg.norm(d_prime2 - a)
     
-    if distance1 < distance2:
+    if distance1 > distance2:
         return d_prime1
     else:
         return d_prime2

@@ -1,7 +1,7 @@
 import numpy as np
 import polyscope as ps
 from Functions.Auxiliary import *
-from Functions.Mesh import Triangle_mesh
+from Functions.Mesh_backup import Triangle_mesh
 
 
 # Increase the recursion limit
