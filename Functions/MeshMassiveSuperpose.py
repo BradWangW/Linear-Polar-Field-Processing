@@ -1,7 +1,7 @@
 import numpy as np
 from tqdm import tqdm
 from scipy.sparse import lil_matrix, eye, bmat
-from Functions.Auxiliary import accumarray, find_indices, is_in_face, compute_planes, complex_projection, obtain_E, compute_V_boundary
+from Functions.Auxiliary import accumarray, find_indices, is_in_face, compute_planes, complex_projection, obtain_E, compute_V_boundary, compute_unfolded_vertex, compute_barycentric_coordinates
 from scipy.sparse.linalg import lsqr
 import cvxopt
 
@@ -277,7 +277,7 @@ class Triangle_mesh():
                 if (np.where(f == e[0])[0] == np.where(f == e[1])[0] - 1) or (f[-1] == e[0] and f[0] == e[1]):
                     d1[len(self.F_f) + i, index] = 1
                 # If the edge is opposite to the face, the orientation is negative
-                elif np.where(f == e[0])[0] == np.where(f == e[1])[0] + 1 or (f[-1] == e[1] and f[0] == e[0]):
+                elif (np.where(f == e[0])[0] == np.where(f == e[1])[0] + 1) or (f[-1] == e[1] and f[0] == e[0]):
                     d1[len(self.F_f) + i, index] = -1
                 else:
                     raise ValueError(f'The edge {e} is not in the face {f}, or the edge face is wrongly defined.')
@@ -304,6 +304,9 @@ class Triangle_mesh():
         self.d1 = d1
         
     def compute_face_pair_rotation(self):
+        '''
+            Compute the rotation between the pair of faces sharing an edge.
+        '''
         pair_rotations = np.zeros(self.E_comb.shape[0])
         
         # The ith element in F_e and E represent the same edge
@@ -335,15 +338,19 @@ class Triangle_mesh():
             # rotation = np.arccos((U[0] * np.conjugate(U[1])).real)
             # print(np.mod(rotation + np.pi, 2*np.pi) - np.pi)
             
+            # The rotation is positive if the edge is aligned with the face
             if np.all(self.E_comb[e1_comb] == f_e[[0, 3]]):
                 pair_rotations[e1_comb] = rotation
+            # The rotation is negative if the edge is opposite to the face
             elif np.all(self.E_comb[e1_comb] == f_e[[3, 0]]):
                 pair_rotations[e1_comb] = -rotation
             else:
                 raise ValueError(f'{self.E_comb[e1_comb]} and {f_e[[0, 3]]} do not match.')
             
+            # The rotation is positive if the edge is aligned with the face
             if np.all(self.E_comb[e2_comb] == f_e[[1, 2]]):
                 pair_rotations[e2_comb] = rotation
+            # The rotation is negative if the edge is opposite to the face
             elif np.all(self.E_comb[e2_comb] == f_e[[2, 1]]):
                 pair_rotations[e2_comb] = -rotation
             else:
@@ -403,50 +410,89 @@ class Triangle_mesh():
                 
             # If the singularity is in an edge, it gives the thetas for the incident faces
             elif len(in_F_e) == 1:
-                self.I_F[in_F_e[0] + len(self.F_f)] = index
+                # !!! Not sure why negative index gives the correct result
+                self.I_F[in_F_e[0] + len(self.F_f)] = -index
                 
             # If the singularity is in a face, it gives thetas for the face
             elif in_F_f is not False:
-                self.F_singular.append(in_F_f)
-                if in_F_f not in self.singularities_f.keys():
-                    self.singularities_f[in_F_f] = [singularity]
-                    self.indices_f[in_F_f] = [index]
-                else:
-                    self.singularities_f[in_F_f].append(singularity)
-                    self.indices_f[in_F_f].append(index)
+                # Obtain the neighbour faces of the face containing the singularity
+                # and the unfolded locations of the singularity on those faces
+                f_neighbours = []
+                singularities_unfolded = np.zeros((3, 3), dtype=float)
                 
-                # Find the edges of the face containing the singularity
-                e_f = np.all(np.isin(self.E_extended, self.F_f[in_F_f]), axis=1)
-            
-                b1, b2, normal = self.B1[in_F_f], self.B2[in_F_f], self.normals[in_F_f]
-                
-                V1 = singularity - self.V_extended[self.E_extended[e_f, 0]]
-                V2 = singularity - self.V_extended[self.E_extended[e_f, 1]]
-                
-                Z1 = complex_projection(b1[None, :], b2[None, :], normal[None, :], V1)
-                Z2 = complex_projection(b1[None, :], b2[None, :], normal[None, :], V2)
-                
-                rotations = index * np.arccos(
-                    np.real(np.conjugate(Z1) * Z2) / (np.abs(Z1) * np.abs(Z2))
-                ).squeeze()
-                
-                Theta[e_f] += rotations            
-                
-                mask_removed_f[in_F_f] = False
-                mask_removed_e[e_f] = False
-                
-                # For the other edge faces involving one of the computed edges, 
-                # the rhs of the system needs to minus the rotation of that edge
-                for j in range(3):
-                    e_involved = np.where(e_f)[0][j]
+                for i in range(3):
+                    common_edge = np.stack([self.F[in_F_f], np.roll(self.F[in_F_f], -1)], axis=1)[i]
+                    f_neighbour = np.where(np.sum(np.isin(self.F, common_edge), axis=1) == 2)[0]
+                    f_neighbour = f_neighbour[f_neighbour != in_F_f][0]
                     
-                    f_involved = len(self.F_f) + np.where(
-                        np.sum(np.isin(self.F_e, self.E_extended[e_f][j]), axis=1) == 2
-                    )[0][0]
+                    v_far = self.V[np.setdiff1d(self.F[f_neighbour], common_edge)].squeeze()
                     
-                    affect_in_d1 = -self.d1[f_involved, e_involved]
+                    f_neighbours.append(f_neighbour)
+                    singularities_unfolded[i] = compute_unfolded_vertex(v_far, self.V_extended[common_edge[0]], self.V_extended[common_edge[1]], singularity)
                     
-                    rhs_correction[f_involved] += affect_in_d1 * rotations[j]
+                F_f_involved = [in_F_f] + f_neighbours
+                singularities_involved = np.concatenate([singularity[None, :], singularities_unfolded])
+                print(F_f_involved, singularities_involved)
+                
+                for f, singularity_unfolded in zip(F_f_involved, singularities_involved):
+                    self.F_singular.append(f)
+                    if f not in self.singularities_f.keys():
+                        self.singularities_f[f] = [singularity_unfolded]
+                        self.indices_f[f] = [index]
+                    else:
+                        self.singularities_f[f].append(singularity_unfolded)
+                        self.indices_f[f].append(index)
+                    
+                    # Find the edges of the face containing the singularity
+                    e_f = np.all(np.isin(self.E_extended, self.F_f[f]), axis=1)
+                
+                    b1, b2, normal = self.B1[f], self.B2[f], self.normals[f]
+                    
+                    V1 = singularity_unfolded - self.V_extended[self.E_extended[e_f, 0]]
+                    V2 = singularity_unfolded - self.V_extended[self.E_extended[e_f, 1]]
+                    
+                    Z1 = complex_projection(b1[None, :], b2[None, :], normal[None, :], V1)
+                    Z2 = complex_projection(b1[None, :], b2[None, :], normal[None, :], V2)
+                    
+                    if f == in_F_f:
+                        rotations = index * np.arccos(
+                            np.real(np.conjugate(Z1) * Z2) / (np.abs(Z1) * np.abs(Z2))
+                        ).squeeze()
+                    else:
+                        rotations = index * (np.angle(Z2) - np.angle(Z1)).squeeze()
+                    print(rotations)
+                    
+                    Theta[e_f] += rotations            
+                    
+                    mask_removed_f[f] = False
+                    mask_removed_e[e_f] = False
+                    
+                    # For the other edge faces involving one of the computed edges, 
+                    # the rhs of the system needs to minus the rotation of that edge
+                    for j in range(3):
+                        e_involved = np.where(e_f)[0][j]
+                        
+                        f_involved = len(self.F_f) + np.where(
+                            np.sum(np.isin(self.F_e, self.E_extended[e_f][j]), axis=1) == 2
+                        )[0][0]
+                        
+                        affect_in_d1 = -self.d1[f_involved, e_involved]
+                        
+                        rhs_correction[f_involved] += affect_in_d1 * rotations[j]
+                        
+                        # Remove the central combinatorial edges
+                        if f == in_F_f:
+                            f_e_involved = np.where(
+                                np.sum(np.isin(self.F_e, self.E_extended[e_involved]), axis=1) == 2
+                            )[0]
+                            
+                            e_comb_involved = np.where(
+                                np.all(np.isin(self.E_comb, self.F_e[f_e_involved]), axis=1)
+                            )[0] + len(self.E_twin)
+                            
+                            mask_removed_f[f_e_involved + len(self.F_f)] = False
+                            mask_removed_e[e_comb_involved] = False
+                            
                 
             else:
                 raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')

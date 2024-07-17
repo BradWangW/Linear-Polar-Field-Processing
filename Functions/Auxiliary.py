@@ -170,6 +170,25 @@ def find_indices(A, B):
     indices = [A_dict[row] for row in B_tuples]
 
     return np.array(indices)
+
+def compute_barycentric_coordinates(v1, v2, v3, posi):
+    v2v1 = v2 - v1
+    v3v1 = v3 - v1
+    posi_v1 = posi - v1
+    
+    dot00 = np.dot(v3v1, v3v1)
+    dot01 = np.dot(v3v1, v2v1)
+    dot02 = np.dot(v3v1, posi_v1)
+    dot11 = np.dot(v2v1, v2v1)
+    dot12 = np.dot(v2v1, posi_v1)
+    
+    inv_denom = dot00 * dot11 - dot01 * dot01
+    
+    u = (dot11 * dot02 - dot01 * dot12) / inv_denom
+    v = (dot00 * dot12 - dot01 * dot02) / inv_denom
+    w = 1 - u - v
+    
+    return u, v, w
  
 
 def is_in_face(V, F, posi, include_EV=False):
@@ -200,20 +219,7 @@ def is_in_face(V, F, posi, include_EV=False):
             v2 = V[f[1]]
             v3 = V[f[2]]
             
-            v2v1 = v2 - v1
-            v3v1 = v3 - v1
-            posi_v1 = posi - v1
-            
-            dot00 = np.dot(v3v1, v3v1)
-            dot01 = np.dot(v3v1, v2v1)
-            dot02 = np.dot(v3v1, posi_v1)
-            dot11 = np.dot(v2v1, v2v1)
-            dot12 = np.dot(v2v1, posi_v1)
-            
-            inv_denom = dot00 * dot11 - dot01 * dot01
-            
-            u = (dot11 * dot02 - dot01 * dot12) / inv_denom
-            v = (dot00 * dot12 - dot01 * dot02) / inv_denom
+            u, v, _ = compute_barycentric_coordinates(v1, v2, v3, posi)
             
             # If include_EV is True, the point is considered to be in the face if it is on the edge or the vertex
             # in other words, all adjacent faces are considered
@@ -238,4 +244,64 @@ def is_in_face(V, F, posi, include_EV=False):
                 raise ValueError(f'The point {posi} is in more than one face.')
         else:
             return False
-            
+
+def normalise(v):
+    """Normalize a vector."""
+    return v / np.linalg.norm(v)
+
+def rotation_matrix(axis, theta):
+    """
+    Generate a rotation matrix to rotate around a specified axis by theta radians.
+    Uses the Rodrigues' rotation formula.
+    """
+    axis = normalise(axis)
+    a = np.cos(theta / 2.0)
+    b, c, d = -axis * np.sin(theta / 2.0)
+    aa, bb, cc, dd = a * a, b * b, c * c, d * d
+    bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
+    return np.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
+                     [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
+                     [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
+
+def compute_unfolded_vertex(a, b, c, d):
+    """
+    Find the coordinates of d' after rotating d around the axis bc so that the plane (b, c, d') 
+    lies in the same plane as (a, b, c) and does not overlap.
+    """
+    # Vectors for the faces
+    n1 = np.cross(b - a, c - a) # Normal vector to (a, b, c)
+    n2 = np.cross(c - b, d - b) # Normal vector to (b, c, d)
+    
+    # Normalize the normals
+    n1 = normalise(n1)
+    n2 = normalise(n2)
+    
+    # Rotation axis (normalized)
+    u = normalise(c - b)
+    
+    # Angle between the normals
+    cos_theta = np.dot(n1, n2)
+    sin_theta = np.linalg.norm(np.cross(n1, n2))
+    theta = np.arctan2(sin_theta, cos_theta)
+    
+    # Rotation matrices for both directions
+    R1 = rotation_matrix(u, theta)
+    R2 = rotation_matrix(u, np.pi-theta)
+    
+    # Translate d to origin relative to b, apply rotations, then translate back
+    d_rel = d - b
+    d_prime_rel1 = np.dot(R1, d_rel)
+    d_prime1 = b + d_prime_rel1
+    
+    d_prime_rel2 = np.dot(R2, d_rel)
+    d_prime2 = b + d_prime_rel2
+    
+    # Choose the rotation that doesn't overlap
+    # Compute the distance from d_prime to the plane (a, b, c)
+    distance1 = np.abs(np.dot(d_prime1 - a, n1))
+    distance2 = np.abs(np.dot(d_prime2 - a, n1))
+    
+    if distance1 < distance2:
+        return d_prime1
+    else:
+        return d_prime2
