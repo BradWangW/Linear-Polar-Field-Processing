@@ -33,7 +33,6 @@ if __name__ == '__main__':
         (2 * (V[0] + V[1]) - V[3])/3, 
         (2 * (V[1] + V[2]) - V[3])/3, 
     ])
-    print(zeros_per_face)
 
     Z_zero_per_face = complex_projection(
         mesh.B1, mesh.B2, mesh.normals, zeros_per_face - V[F[:, 0]], diagonal=True
