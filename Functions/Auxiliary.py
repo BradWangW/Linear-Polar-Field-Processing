@@ -270,7 +270,7 @@ def compute_unfolded_vertex(a, b, c, d):
     """
     # Vectors for the faces
     n1 = np.cross(b - a, c - a) # Normal vector to (a, b, c)
-    n2 = np.cross(c - b, d - b) # Normal vector to (b, c, d)
+    n2 = np.cross(b - d, c - d) # Normal vector to (b, c, d)
     
     # Normalize the normals
     n1 = normalise(n1)
@@ -284,24 +284,18 @@ def compute_unfolded_vertex(a, b, c, d):
     sin_theta = np.linalg.norm(np.cross(n1, n2))
     theta = np.arctan2(sin_theta, cos_theta)
     
-    # Rotation matrices for both directions
-    R1 = rotation_matrix(u, theta)
-    R2 = rotation_matrix(u, np.pi-theta)
+    angles = [theta, np.pi - theta, -theta, -np.pi + theta]
+    furthest_point = None
+    furthest_distance = 0
     
-    # Translate d to origin relative to b, apply rotations, then translate back
-    d_rel = d - b
-    d_prime_rel1 = np.dot(R1, d_rel)
-    d_prime1 = b + d_prime_rel1
+    for angle in angles:
+        R = rotation_matrix(u, angle)
+        d_prime = b + np.dot(R, d - b)
+        
+        distance = np.linalg.norm(d_prime - a)
+        
+        if distance > furthest_distance:
+            furthest_distance = distance
+            furthest_point = d_prime
     
-    d_prime_rel2 = np.dot(R2, d_rel)
-    d_prime2 = b + d_prime_rel2
-    
-    # Choose the rotation that doesn't overlap
-    # Compute the distance from d_prime to the plane (a, b, c)
-    distance1 = np.linalg.norm(d_prime1 - a)
-    distance2 = np.linalg.norm(d_prime2 - a)
-    
-    if distance1 > distance2:
-        return d_prime1
-    else:
-        return d_prime2
+    return furthest_point
