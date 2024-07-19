@@ -11,31 +11,33 @@ np.set_printoptions(threshold=np.inf)
 
 if __name__ == '__main__':
     
-    # V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
-    # E = obtain_E(F)
-    # # singularities = np.array([
-    # #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-    # #     0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]], 
-    # #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
-    # #     0.6 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.2 * V[F[100, 2]]
-    # # ])
+    V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
+    E = obtain_E(F)
     # singularities = np.array([
     #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-    #     (V[E[100, 0]] + V[E[100, 1]])/2,
-    #     V[100]
+    #     0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]], 
+    #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
+    #     0.6 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.2 * V[F[100, 2]]
     # ])
-    # # singularities = np.array([
-    # #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-    # #     0.2 * V[F[10, 0]] + 0.2 * V[F[10, 1]] + 0.6 * V[F[10, 2]]
-    # # ])   
-    # # singularities = np.array([
-    # #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]], 
-    # #     V[E[100, 0]]
-    # # ])
-    # indices = [1, 1, 1, -1]
-    # v_init = 10
-    # z_init = 1
+    singularities = np.array([
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        (V[E[100, 0]] + V[E[100, 1]])/2,
+        V[100]
+    ])
+    # singularities = np.array([
+    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+    #     0.2 * V[F[10, 0]] + 0.2 * V[F[10, 1]] + 0.6 * V[F[10, 2]]
+    # ])   
+    # singularities = np.array([
+    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]], 
+    #     V[E[100, 0]]
+    # ])
+    indices = [1, 1, 1, 1, -1, -1]
+    v_init = 10
+    z_init = 1
     
     # V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
     # singularities = np.array([
@@ -48,16 +50,16 @@ if __name__ == '__main__':
     # v_init = 10
     # z_init = 1j
     
-    V, F = load_off_file(os.path.join('..', 'data', 'cow.off'))
-    singularities = np.array([
-        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-        0.6 * V[F[20, 0]] + 0.2 * V[F[20, 1]] + 0.2 * V[F[20, 2]], 
-        0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
-        0.6 * V[F[220, 0]] + 0.2 * V[F[220, 1]] + 0.2 * V[F[220, 2]]
-    ])
-    indices = [1, -1, 1, 1]
-    v_init = 10
-    z_init = 1j
+    # V, F = load_off_file(os.path.join('..', 'data', 'cow.off'))
+    # singularities = np.array([
+    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+    #     0.6 * V[F[20, 0]] + 0.2 * V[F[20, 1]] + 0.2 * V[F[20, 2]], 
+    #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
+    #     0.6 * V[F[220, 0]] + 0.2 * V[F[220, 1]] + 0.2 * V[F[220, 2]]
+    # ])
+    # indices = [1, -1, 1, 1]
+    # v_init = 10
+    # z_init = 1j
     
     # A minimal triangulated tetrahedron
     # V = np.array([
