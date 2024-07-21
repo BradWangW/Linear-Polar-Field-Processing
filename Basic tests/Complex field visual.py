@@ -4,10 +4,10 @@ from matplotlib.widgets import Slider
 
 # Define the complex vector field function
 def f(z, r, t):
-    return (z + r * np.exp(1j * t) * np.conj(z))
+    return r*z ** t
 
 # Generate the grid of points
-num_coor = 30  # Number of axes directions
+num_coor = 50  # Number of axes directions
 
 X = np.linspace(-5, 5, num_coor)
 Y = np.linspace(-5, 5, num_coor)
@@ -43,7 +43,7 @@ ax_r = plt.axes([0.1, 0.1, 0.65, 0.03])
 ax_t = plt.axes([0.1, 0.05, 0.65, 0.03])
 
 slider_r = Slider(ax_r, 'r', 0.1, 10.0, valinit=r)
-slider_t = Slider(ax_t, 't', 0.0, 2 * np.pi, valinit=t)
+slider_t = Slider(ax_t, 't', 0.0, 10, valinit=t)
 
 # Update function to be called when sliders are changed
 def update(val):

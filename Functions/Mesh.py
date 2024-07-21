@@ -392,11 +392,13 @@ class Triangle_mesh():
             
             Z1 = complex_projection(b1[None, :], b2[None, :], normal[None, :], V1)
             Z2 = complex_projection(b1[None, :], b2[None, :], normal[None, :], V2)
-
+            
+            # If the singularity is inside the face
             if in_face:
                 rotations = index * np.arccos(
                     np.real(np.conjugate(Z1) * Z2) / (np.abs(Z1) * np.abs(Z2))
                 ).squeeze()
+            # If the singularity is on the vertex/edge
             else:
                 rotations = index * (np.angle(Z2) - np.angle(Z1)).squeeze()
                 rotations = np.mod(rotations + np.pi, 2*np.pi) - np.pi
@@ -559,6 +561,29 @@ class Triangle_mesh():
         # print(solution['x'])
         # -----------------------------------------------------------------------------------#
         
+        Theta_over_pi = np.abs(Theta) > np.pi
+        
+        print('Number of thetas over pi: ', np.sum(Theta_over_pi))
+        
+        # Edges with >pi rotations cannot be handled by lienar field, 
+        # so superposition would be needed
+        # self.F_over_pi = []
+        # self.num_subdivisions_f = {}
+        
+        # for e in np.where(Theta_over_pi[:len(self.E_twin)])[0]:
+        #     e_twin_over_pi = self.E_twin[e]
+        #     f_over_pi = np.where(
+        #         np.sum(np.isin(self.F_f, e_twin_over_pi), axis=1) == 2
+        #     )[0][0]
+            
+        #     if f_over_pi not in self.F_singular:
+        #         if f_over_pi not in self.F_over_pi:
+        #             self.F_over_pi.append(f_over_pi)
+        #             self.num_subdivisions_f[f_over_pi] = Theta[e] // np.pi + 1
+        #         else:
+        #             if self.num_subdivisions_f[f_over_pi] < Theta[e] // np.pi + 1:
+        #                 self.num_subdivisions_f[f_over_pi] = Theta[e] // np.pi + 1
+        
         return Theta
     
     def reconstruct_corners_from_thetas(self, Theta, v_init, z_init, Theta_include_pairface=False):
@@ -667,6 +692,27 @@ class Triangle_mesh():
                 coeffs_singular[i] = coeffs_f
                 mean_itn += sub_itn
                 
+            # If the face has edge rotation > pi
+            # elif i in self.F_over_pi:
+            #     Uf_sub = np.exp(1j * np.angle(Uf) / self.num_subdivisions_f[i])
+            #     prod_sub = np.conjugate(Uf_sub) * Zf
+                    
+            #     lhs = np.array([
+            #         [prod_sub[0].imag, prod_sub[0].real, -Uf_sub[0].imag, Uf_sub[0].real],
+            #         [prod_sub[1].imag, prod_sub[1].real, -Uf_sub[1].imag, Uf_sub[1].real],
+            #         [Zf[0].real, -Zf[0].imag, 1, 0],
+            #         [Zf[0].imag, Zf[0].real, 0, 1]
+            #     ], dtype=float)
+            #     rhs = np.array([
+            #         0, 0, Uf_sub[0].real, Uf_sub[0].imag
+            #     ])
+
+            #     result, _, itn, err = lsqr(lhs, rhs)[:4]
+            #     coeffs[i, 0] = result[0] + 1j * result[1]
+            #     coeffs[i, 1] = result[2] + 1j * result[3]
+            #     total_err += err
+            #     mean_itn += itn/len(self.F_f)
+                
             # If the face is not singular, the last row aligns the first corner 
             # value up to +-sign and scale, as for the other two corners
             else:
@@ -710,6 +756,7 @@ class Triangle_mesh():
             posis_extended = []
             F_involved = []
             idx_singular = []
+            # idx_superposed = []
             
             for posi in tqdm(posis, 
                              desc='Computing the linear field at the points', 
@@ -720,6 +767,8 @@ class Triangle_mesh():
                 for i, f in enumerate(f_involved):
                     if f in self.F_singular:
                         idx_singular.append(len(posis_extended) + i)
+                    # elif f in self.F_over_pi:
+                    #     idx_superposed.append(len(posis_extended) + i)
                 
                 posis_extended += [posi] * len(f_involved)
                 F_involved += f_involved
@@ -728,6 +777,7 @@ class Triangle_mesh():
             F_involved = np.array(F_involved).flatten()
             mask = np.zeros(len(posis_extended), dtype=bool)
             mask[idx_singular] = True
+            # mask[idx_superposed] = True
             
             # Compute the linear field
             B1 = self.B1[F_involved]; B2 = self.B2[F_involved]; normals = self.normals[F_involved]
@@ -754,6 +804,10 @@ class Triangle_mesh():
                         raise ValueError('The field cannot handle face singularities with index > 1 or < 1 yet.')
                     
                 vectors_complex[i] = prod
+            
+            # for i in idx_superposed:
+            #     f = F_involved[i]
+            #     vectors_complex[i] = (coeffs[f, 0] * Z[i] + coeffs[f, 1]) ** self.num_subdivisions_f[f]
             
             vectors_complex = vectors_complex
 
@@ -837,15 +891,15 @@ class Triangle_mesh():
         
         return field_truth, field
 
-    def sample_points_and_vectors(self, field, num_samples=3, margin = 0.15, singular_detail=False):
+    def sample_points_and_vectors(self, field, num_samples=3, margin = 0.15, singular_detail=False, num_samples_detail=10, margin_detail=0.05):
         points = []
         margins = [margin] * len(self.F)
         nums_samples = [num_samples] * len(self.F)
         
         if singular_detail:
             for f in self.F_singular:
-                nums_samples[f] = 10
-                margins[f] = 0.05
+                nums_samples[f] = num_samples_detail
+                margins[f] = margin_detail
         
         for i, f in tqdm(enumerate(self.F), desc='Sampling points and vectors', 
                          total=len(self.F), leave=False):

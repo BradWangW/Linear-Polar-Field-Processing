@@ -24,6 +24,10 @@ if __name__ == '__main__':
         0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
         0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
         0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
         (V[E[100, 0]] + V[E[100, 1]])/2,
         V[100]
     ])
@@ -35,7 +39,7 @@ if __name__ == '__main__':
     #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]], 
     #     V[E[100, 0]]
     # ])
-    indices = [1, 1, 1, 1, -1, -1]
+    indices = [1, 1, 1, 1, 1, 1, 1, 1, 1, -1]
     v_init = 10
     z_init = 1
     
@@ -88,7 +92,7 @@ if __name__ == '__main__':
     )
     
     posis, vectors = mesh.sample_points_and_vectors(
-        field, num_samples=3, margin=0.15, singular_detail=True
+        field, num_samples=3, margin=0.15, singular_detail=True, num_samples_detail=10, margin_detail=0.05
         )
     
     vectors /= np.linalg.norm(vectors, axis=1)[:, None]
