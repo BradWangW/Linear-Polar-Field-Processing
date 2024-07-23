@@ -1,7 +1,10 @@
 import numpy as np
 from tqdm import tqdm
 from scipy.sparse import lil_matrix, eye, bmat
-from Functions.Auxiliary import accumarray, find_indices, is_in_face, compute_planes, complex_projection, obtain_E, compute_V_boundary, compute_unfolded_vertex, compute_barycentric_coordinates
+from Functions.Auxiliary import (accumarray, find_indices, is_in_face, compute_planes, 
+                                 complex_projection, obtain_E, compute_V_boundary, 
+                                 compute_unfolded_vertex, compute_barycentric_coordinates, 
+                                 compute_angle_defect)
 from scipy.sparse.linalg import lsqr
 import cvxopt
 
@@ -18,75 +21,14 @@ class Triangle_mesh():
         
         self.V_boundary = compute_V_boundary(F)
         
-        self.B1, self.B2, self.normals = compute_planes(V, F)
+        self.G_V = compute_angle_defect(V, F, self.V_boundary)
         
-        self.G_V = self.compute_angle_defect()
+        self.B1, self.B2, self.normals = compute_planes(V, F)
         
     def initialise_field_processing(self):
         self.construct_extended_mesh()
         self.construct_d1_extended()
         self.compute_face_pair_rotation()
-        
-    def compute_angle_defect(self):
-        angles = np.zeros(self.F.shape)
-        
-        # Compute the angles of each face
-        for i, face in tqdm(enumerate(self.F), 
-                            desc='Computing angle defect', 
-                            total=self.F.shape[0],
-                            leave=False):
-            v1, v2, v3 = self.V[face]
-            angles[i, 0] = np.arccos(np.dot(v2 - v1, v3 - v1) / 
-                                    (np.linalg.norm(v2 - v1) * np.linalg.norm(v3 - v1)))
-            angles[i, 1] = np.arccos(np.dot(v1 - v2, v3 - v2) / 
-                                    (np.linalg.norm(v1 - v2) * np.linalg.norm(v3 - v2)))
-            angles[i, 2] = np.pi - angles[i, 0] - angles[i, 1]
-        
-        # Accumulate the angles of each vertex
-        angles = accumarray(
-            self.F, 
-            angles
-        )
-        
-        # For interior (boundary) vertices, the angle defect is 2pi - sum angles (pi - sum angles)
-        boundVerticesMask = np.zeros(self.V.shape[0])
-        if len(self.V_boundary) > 0:
-            boundVerticesMask[self.V_boundary] = 1
-        
-        G_V = (2 - boundVerticesMask) * np.pi - angles
-        return G_V
-      
-    def sort_neighbours(self, V, F, v, neighbours=None, extended=True):
-        '''
-        Sort the neighbour faces of a vertex in counter-clockwise order.
-        '''
-        # if extended:
-        #     V = self.V_extended
-        #     F = self.F_f
-        # else:
-        #     V = self.V
-        #     F = self.F
-        
-        if neighbours is None:
-            neighbours = np.any(F == v, axis=1)
-            
-        v1 = V[v].copy()
-        F_neighbour = F[neighbours]
-        
-        # Compute the centroids of the neighbour faces
-        v2s = np.mean(V[F_neighbour], axis=1).copy()
-        
-        # Avoid division by zero
-        # while np.any(np.linalg.norm(v2s, axis=1) == 0) or np.linalg.norm(v1) == 0:
-        #     v1 += 1e-6
-        #     v2s += 1e-6
-        
-        # Sort by the angles between the centroids and the vertex
-        epsilon = 1e-10
-        angles = np.arccos(np.sum(v1 * v2s, axis=1) / ((np.linalg.norm(v1) + epsilon) * (np.linalg.norm(v2s, axis=1) + epsilon)))
-        order = np.argsort(angles)
-        
-        return order
     
     def construct_extended_mesh(self):
         '''
@@ -176,7 +118,7 @@ class Triangle_mesh():
                 raise ValueError(f'Wrong number of twin edges found: {e_twin}.')
         
         # Mapping for efficient construction of d1
-        self.F_v_map_E_comb = {}
+        F_v_map_E_comb = {}
         
         # Construct vertex-faces and combinatorial edges
         for v, indices_extended in tqdm(V_map.items(), 
@@ -218,7 +160,7 @@ class Triangle_mesh():
             # the vertex-face is constructed
             # Otherwise, only one combinatorial edge is formed
             if len(indices_extended) > 2:
-                self.F_v_map_E_comb[len(F_v)] = np.arange(len(indices_sorted)) + len(E_comb)
+                F_v_map_E_comb[len(F_v)] = np.arange(len(indices_sorted)) + len(E_comb)
                     
                 # Add the vertex-face
                 F_v.append(indices_sorted)
@@ -247,6 +189,8 @@ class Triangle_mesh():
         self.F_v = F_v
         
         self.V_map = V_map
+        self.F_v_map_E_comb = F_v_map_E_comb
+        
         self.G_F = np.concatenate([
             np.zeros(len(self.F_f) + len(self.F_e)),
             self.G_V
@@ -348,8 +292,7 @@ class Triangle_mesh():
                 raise ValueError(f'{self.E_comb[e2_comb]} and {f_e[[1, 2]]} do not match.')
             
         self.pair_rotations = pair_rotations
-        
-        
+            
     def compute_thetas(self, singularities=None, indices=None):
         '''
             Compute the set of thetas for each face singularity 
@@ -436,11 +379,6 @@ class Triangle_mesh():
                                        total=len(singularities), 
                                        leave=False):
             
-            # Check if the singularity is in a vertex
-            # in_F_v = np.where(np.all(
-            #     self.V_extended[[f_v[0] for f_v in self.F_v]] == singularity,
-            #     axis=1
-            # ))[0]
             in_F_v = np.where(
                 np.all(np.isclose(self.V, singularity[None, :]), axis=1)
             )[0]
@@ -521,8 +459,12 @@ class Triangle_mesh():
                 raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')
                 
         # Independent quantities for quadratic programming
-        Q = eye(np.sum(mask_removed_e), format='coo')
+        Q = eye(np.sum(mask_removed_e), format='lil')
         c = np.zeros(np.sum(mask_removed_e))
+        
+        # Add more penalty for the combinatorial edges to reduce jumps
+        Q[len(self.E_twin):, len(self.E_twin):] *= 5
+        Q = Q.tocoo()
         
         # Quantities for quadratic programming dependent on the singularities
         E = self.d1[mask_removed_f][:, mask_removed_e]
@@ -541,48 +483,8 @@ class Triangle_mesh():
         Theta[mask_removed_e] = solution[:np.sum(mask_removed_e)]
         
         print(f'Theta computation iteration and residual: {itn}, {r1norm}.')
-
-        # -----------------------------------------------------------------------------------#
-        # Using package cvxopt to solve the quadratic programming problem
-        # Verified: gave the same result
-        # Q = cvxopt.matrix(Q.toarray())
-        # c = cvxopt.matrix(c)
-        # E = cvxopt.matrix(E.toarray())
-        # d = cvxopt.matrix(d)
-
-        # # Define G and h for no inequality constraints
-        # G = cvxopt.matrix(np.zeros(dim_E))
-        # h = cvxopt.matrix(np.zeros(dim_E[0]))
-
-        # # Solve the quadratic program
-        # solution = cvxopt.solvers.qp(Q, c, G, h, E, d)
-
-        # # Extract the optimal solution
-        # print(solution['x'])
-        # -----------------------------------------------------------------------------------#
         
-        Theta_over_pi = np.abs(Theta) > np.pi
-        
-        print('Number of thetas over pi: ', np.sum(Theta_over_pi))
-        
-        # Edges with >pi rotations cannot be handled by lienar field, 
-        # so superposition would be needed
-        # self.F_over_pi = []
-        # self.num_subdivisions_f = {}
-        
-        # for e in np.where(Theta_over_pi[:len(self.E_twin)])[0]:
-        #     e_twin_over_pi = self.E_twin[e]
-        #     f_over_pi = np.where(
-        #         np.sum(np.isin(self.F_f, e_twin_over_pi), axis=1) == 2
-        #     )[0][0]
-            
-        #     if f_over_pi not in self.F_singular:
-        #         if f_over_pi not in self.F_over_pi:
-        #             self.F_over_pi.append(f_over_pi)
-        #             self.num_subdivisions_f[f_over_pi] = Theta[e] // np.pi + 1
-        #         else:
-        #             if self.num_subdivisions_f[f_over_pi] < Theta[e] // np.pi + 1:
-        #                 self.num_subdivisions_f[f_over_pi] = Theta[e] // np.pi + 1
+        print(f'Total combinatorial rotations: {np.sum(np.abs(Theta[len(self.E_twin):]))}.')
         
         return Theta
     
@@ -597,11 +499,12 @@ class Triangle_mesh():
                 Us: (num_V_extended, num_singularities) complex array of corner values
         '''
         if not Theta_include_pairface:
-            Theta[len(self.E_twin):] += self.pair_rotations
+            Theta_with_pairface = Theta.copy()
+            Theta_with_pairface[len(self.E_twin):] += self.pair_rotations
             # Theta = np.mod(Theta + np.pi, 2 * np.pi) - np.pi
             
         lhs = lil_matrix((len(self.E_extended) + 1, len(self.V_extended)), dtype=complex)
-        lhs[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = np.exp(1j * Theta)
+        lhs[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = np.exp(1j * Theta_with_pairface)
         lhs[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
         lhs[-1, v_init] = 1
         
@@ -609,11 +512,91 @@ class Triangle_mesh():
         rhs[-1] = z_init / np.abs(z_init)
         
         U, _, itn, r1norm = lsqr(lhs.tocsr(), rhs)[:4]
+        
+        U = U / np.abs(U)
             
         print(f'Corner reconstruction iterations and residuals',
               itn, r1norm)
         
         return U
+    
+    def subdivide_faces_over_pi(self, Theta, U):
+        # Edges with >pi rotations cannot be handled by linear field, 
+        # so subdivisions are needed
+        self.F_over_pi = []
+        num_subdivisions_f = {}
+        
+        Theta_over_pi = np.abs(Theta) > np.pi
+        print('Number of (twin-edge) thetas over pi: ', np.sum(Theta_over_pi[:len(self.E_twin)]))
+        
+        # Loop over the edges with >pi rotations and find the faces to subdivide
+        for e in np.where(Theta_over_pi[:len(self.E_twin)])[0]:
+            f = np.where(
+                np.sum(np.isin(self.F_f, self.E_twin[e]), axis=1) == 2
+            )[0][0]
+            
+            # Only non-singular faces can be subdivided
+            if f not in self.F_singular:
+                # the number of subdivisions is based on the edge with the largest rotation
+                if f not in self.F_over_pi:
+                    self.F_over_pi.append(f)
+                    num_subdivisions_f[f] = np.abs(Theta[e]) // np.pi + 1
+                else:
+                    if num_subdivisions_f[f] < np.abs(Theta[e]) // np.pi + 1:
+                        num_subdivisions_f[f] = np.abs(Theta[e]) // np.pi + 1
+        
+        self.U_subdivided = {}
+        self.F_subdivided = {}
+        self.V_subdivided = {}
+            
+        # Loop over the faces to subdivide and perform the subdivision
+        for f in self.F_over_pi:
+            N = int(num_subdivisions_f[f])
+            
+            # Note the face is oriented v1 -> v2 -> v3
+            # so the rotation is along v1 -> v2 -> v3
+            V_f = self.V_extended[self.F_f[f]]
+            U_f = U[self.F_f[f]]
+            
+            # Obtain the signs of the rotations in Theta
+            signs = np.sign(Theta[np.where(np.all(np.isin(self.E_twin, self.F_f[f]), axis=1))[0]])
+            
+            # Rotations u1 -> u2, u2 -> u3, u3 -> u1
+            rotations = (np.roll(np.angle(U_f), -1) - np.angle(U_f)).squeeze()
+            rotations = np.mod(rotations + np.pi, 2*np.pi) - np.pi + 2 * np.pi * (N - 1) * signs
+            
+            self.F_subdivided[f] = []
+            self.V_subdivided[f] = []
+            self.U_subdivided[f] = []
+
+            # Step 2: Create the edge points
+            for i in range(N + 1):
+                for j in range(N + 1 - i):
+                    u = i / N
+                    v = j / N
+                    w = (N - i - j) / N
+                    
+                    self.V_subdivided[f].append(u * V_f[0] + v * V_f[1] + w * V_f[2])
+                    self.U_subdivided[f].append(U_f[2] * np.exp(-1j * rotations[1] * v) * np.exp(-1j * rotations[0] * u))
+            
+            # Step 3: Create the list of triangles
+            for i in range(N):
+                for j in range(N - i):
+                    # Calculate indices for the top triangle
+                    idx1 = (i * (N + 1) - (i * (i - 1)) // 2) + j
+                    idx2 = idx1 + 1
+                    idx3 = idx1 + (N + 1 - i)
+                    self.F_subdivided[f].append([idx1, idx2, idx3])
+                    if j < N - i - 1:
+                        # Calculate indices for the bottom triangle
+                        idx4 = idx2
+                        idx5 = idx3
+                        idx6 = idx3 + 1
+                        self.F_subdivided[f].append([idx4, idx5, idx6])
+            
+            self.F_subdivided[f] = np.array(self.F_subdivided[f])
+            self.V_subdivided[f] = np.array(self.V_subdivided[f])
+            self.U_subdivided[f] = np.array(self.U_subdivided[f])
     
     def reconstruct_linear_from_corners(self, U):
         '''
@@ -626,6 +609,7 @@ class Triangle_mesh():
         '''
         coeffs = np.zeros((len(self.F_f), 2), dtype=complex)
         coeffs_singular = {}
+        coeffs_subdivided = {}
         total_err = 0
         mean_itn = 0
 
@@ -676,7 +660,7 @@ class Triangle_mesh():
                             [-z_centre.imag, z_centre.real, 0, 1]
                         ], dtype=float)
                     else:
-                        raise ValueError('The field cannot handle face singularities with index > 1 or < 1 yet.')
+                        raise ValueError('The field cannot handle face singularities with index > 1 or < -1 yet.')
                     
                     rhs = np.array([
                         0, 0, uf0.real, uf0.imag
@@ -693,31 +677,45 @@ class Triangle_mesh():
                 mean_itn += sub_itn
                 
             # If the face has edge rotation > pi
-            # elif i in self.F_over_pi:
-            #     Uf_sub = np.exp(1j * np.angle(Uf) / self.num_subdivisions_f[i])
-            #     prod_sub = np.conjugate(Uf_sub) * Zf
+            elif i in self.F_over_pi:
+                v0 = self.V_extended[f[0]]
+                coeffs_f = np.zeros((len(self.F_subdivided[i]), 2), dtype=complex)
+                sub_itn = 0
+                
+                # For each subdivided face, the last row aligns the first corner
+                for j, f_sub in enumerate(self.F_subdivided[i]):
+                    Zf_sub = complex_projection(
+                        b1, b2, normal, self.V_subdivided[i][f_sub] - v0
+                    )[0]
                     
-            #     lhs = np.array([
-            #         [prod_sub[0].imag, prod_sub[0].real, -Uf_sub[0].imag, Uf_sub[0].real],
-            #         [prod_sub[1].imag, prod_sub[1].real, -Uf_sub[1].imag, Uf_sub[1].real],
-            #         [Zf[0].real, -Zf[0].imag, 1, 0],
-            #         [Zf[0].imag, Zf[0].real, 0, 1]
-            #     ], dtype=float)
-            #     rhs = np.array([
-            #         0, 0, Uf_sub[0].real, Uf_sub[0].imag
-            #     ])
-
-            #     result, _, itn, err = lsqr(lhs, rhs)[:4]
-            #     coeffs[i, 0] = result[0] + 1j * result[1]
-            #     coeffs[i, 1] = result[2] + 1j * result[3]
-            #     total_err += err
-            #     mean_itn += itn/len(self.F_f)
+                    Uf_sub = self.U_subdivided[i][f_sub]
+                    prod_sub = np.conjugate(Uf_sub) * Zf_sub
+                    
+                    lhs = np.array([
+                        [prod_sub[0].imag, prod_sub[0].real, -Uf_sub[0].imag, Uf_sub[0].real],
+                        [prod_sub[1].imag, prod_sub[1].real, -Uf_sub[1].imag, Uf_sub[1].real],
+                        [Zf_sub[0].real, -Zf_sub[0].imag, 1, 0],
+                        [Zf_sub[0].imag, Zf_sub[0].real, 0, 1]
+                    ], dtype=float)
+                    rhs = np.array([
+                        0, 0, Uf_sub[0].real, Uf_sub[0].imag
+                    ])
+                    
+                    result, _, itn, err = lsqr(lhs, rhs)[:4]
+                    coeffs_f[j, 0] = result[0] + 1j * result[1]
+                    coeffs_f[j, 1] = result[2] + 1j * result[3]
+                    
+                    total_err += err
+                    sub_itn += itn/(len(self.F_f) * len(self.F_subdivided[i]))
+                
+                coeffs_subdivided[i] = coeffs_f
+                mean_itn += sub_itn
                 
             # If the face is not singular, the last row aligns the first corner 
             # value up to +-sign and scale, as for the other two corners
             else:
                 lhs = np.array([
-                    [prod[0].imag, prod[0].real, -Uf[0].imag, Uf[0].real],
+                    [prod[2].imag, prod[2].real, -Uf[2].imag, Uf[2].real],
                     [prod[1].imag, prod[1].real, -Uf[1].imag, Uf[1].real],
                     [Zf[0].real, -Zf[0].imag, 1, 0],
                     [Zf[0].imag, Zf[0].real, 0, 1]
@@ -735,9 +733,9 @@ class Triangle_mesh():
         print(f'Linear field reconstruction mean iterations and total residuals',
               mean_itn, total_err)
         
-        return coeffs, coeffs_singular
+        return coeffs, coeffs_singular, coeffs_subdivided
     
-    def define_linear_field(self, coeffs, coeffs_singular):
+    def define_linear_field(self, coeffs, coeffs_singular, coeffs_subdivided):
         '''
             Define the linear field from the coefficients.
             Input:
@@ -756,7 +754,7 @@ class Triangle_mesh():
             posis_extended = []
             F_involved = []
             idx_singular = []
-            # idx_superposed = []
+            idx_subdivided = []
             
             for posi in tqdm(posis, 
                              desc='Computing the linear field at the points', 
@@ -767,8 +765,8 @@ class Triangle_mesh():
                 for i, f in enumerate(f_involved):
                     if f in self.F_singular:
                         idx_singular.append(len(posis_extended) + i)
-                    # elif f in self.F_over_pi:
-                    #     idx_superposed.append(len(posis_extended) + i)
+                    elif f in self.F_over_pi:
+                        idx_subdivided.append(len(posis_extended) + i)
                 
                 posis_extended += [posi] * len(f_involved)
                 F_involved += f_involved
@@ -777,7 +775,7 @@ class Triangle_mesh():
             F_involved = np.array(F_involved).flatten()
             mask = np.zeros(len(posis_extended), dtype=bool)
             mask[idx_singular] = True
-            # mask[idx_superposed] = True
+            mask[idx_subdivided] = True
             
             # Compute the linear field
             B1 = self.B1[F_involved]; B2 = self.B2[F_involved]; normals = self.normals[F_involved]
@@ -805,9 +803,12 @@ class Triangle_mesh():
                     
                 vectors_complex[i] = prod
             
-            # for i in idx_superposed:
-            #     f = F_involved[i]
-            #     vectors_complex[i] = (coeffs[f, 0] * Z[i] + coeffs[f, 1]) ** self.num_subdivisions_f[f]
+            for i in idx_subdivided:
+                f = F_involved[i]
+                
+                f_sub_involved = is_in_face(self.V_subdivided[f], self.F_subdivided[f], posis_extended[i], include_EV=True)
+                
+                vectors_complex[i] = coeffs_subdivided[f][f_sub_involved, 0] * Z[i] + coeffs_subdivided[f][f_sub_involved, 1]
             
             vectors_complex = vectors_complex
 
@@ -817,20 +818,16 @@ class Triangle_mesh():
         
         return linear_field
     
-    def vector_field(self, singularities, indices, v_init, z_init, conj=False):
+    def vector_field(self, singularities, indices, v_init, z_init):
         Theta = self.compute_thetas(singularities=singularities, indices=indices)
         
         U = self.reconstruct_corners_from_thetas(Theta, v_init, z_init)
         
-        if conj:
-            coeffs, coeffs_singular = self.reconstruct_linear_conj_from_corners(U)
-            
-            field = self.define_linear_conj_field(coeffs, coeffs_singular)
+        self.subdivide_faces_over_pi(Theta, U)
         
-        else:
-            coeffs, coeffs_singular = self.reconstruct_linear_from_corners(U)
+        coeffs, coeffs_singular, coeffs_subdivided = self.reconstruct_linear_from_corners(U)
             
-            field = self.define_linear_field(coeffs, coeffs_singular)
+        field = self.define_linear_field(coeffs, coeffs_singular, coeffs_subdivided)
         
         return field
     
@@ -897,7 +894,7 @@ class Triangle_mesh():
         nums_samples = [num_samples] * len(self.F)
         
         if singular_detail:
-            for f in self.F_singular:
+            for f in self.F_singular + self.F_over_pi:
                 nums_samples[f] = num_samples_detail
                 margins[f] = margin_detail
         

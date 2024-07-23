@@ -56,6 +56,35 @@ def compute_V_boundary(F):
     V_boundary = np.unique(np.array(E_boundary).flatten())
     
     return V_boundary
+ 
+def compute_angle_defect(V, F, V_boundary):
+    angles = np.zeros(F.shape)
+    
+    # Compute the angles of each face
+    for i, face in tqdm(enumerate(F), 
+                        desc='Computing angle defect', 
+                        total=F.shape[0],
+                        leave=False):
+        v1, v2, v3 = V[face]
+        angles[i, 0] = np.arccos(np.dot(v2 - v1, v3 - v1) / 
+                                (np.linalg.norm(v2 - v1) * np.linalg.norm(v3 - v1)))
+        angles[i, 1] = np.arccos(np.dot(v1 - v2, v3 - v2) / 
+                                (np.linalg.norm(v1 - v2) * np.linalg.norm(v3 - v2)))
+        angles[i, 2] = np.pi - angles[i, 0] - angles[i, 1]
+    
+    # Accumulate the angles of each vertex
+    angles = accumarray(
+        F, 
+        angles
+    )
+    
+    # For interior (boundary) vertices, the angle defect is 2pi - sum angles (pi - sum angles)
+    boundVerticesMask = np.zeros(V.shape[0])
+    if len(V_boundary) > 0:
+        boundVerticesMask[V_boundary] = 1
+    
+    G_V = (2 - boundVerticesMask) * np.pi - angles
+    return G_V
 
 def compute_planes(V, F):
     ''' 
@@ -91,7 +120,6 @@ def compute_planes(V, F):
     B2 = B2 / np.linalg.norm(B2, axis=1)[:, None]
     
     return B1, B2, normals
-
 
 def complex_projection(B1, B2, normals, posis, diagonal=False):
     '''
@@ -142,18 +170,26 @@ def complex_projection(B1, B2, normals, posis, diagonal=False):
             
         return Z
 
-
-def obtain_E(F):
+def sort_neighbours( V, F, v, neighbours=None):
     '''
-    Obtain the edge list from the face list.
+    Sort the neighbour faces of a vertex in counter-clockwise order.
     '''
-    E = np.concatenate([
-        F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]
-    ])
-    E = np.unique(np.sort(E, axis=1), axis=0)
     
-    return E
-
+    if neighbours is None:
+        neighbours = np.any(F == v, axis=1)
+        
+    v1 = V[v].copy()
+    F_neighbour = F[neighbours]
+    
+    # Compute the centroids of the neighbour faces
+    v2s = np.mean(V[F_neighbour], axis=1).copy()
+    
+    # Sort by the angles between the centroids and the vertex
+    epsilon = 1e-10
+    angles = np.arccos(np.sum(v1 * v2s, axis=1) / ((np.linalg.norm(v1) + epsilon) * (np.linalg.norm(v2s, axis=1) + epsilon)))
+    order = np.argsort(angles)
+    
+    return order
 
 def find_indices(A, B):
     '''
