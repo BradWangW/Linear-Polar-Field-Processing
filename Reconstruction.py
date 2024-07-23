@@ -18,66 +18,18 @@ if __name__ == '__main__':
     #     0.6 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.2 * V[F[0, 2]], 
     #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
     #     0.6 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.2 * V[F[100, 2]]
-    # ])
+    # ])     
     singularities = np.array([
-        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+        0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
+        0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
+        0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
+        0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
         (V[E[100, 0]] + V[E[100, 1]])/2,
         V[100]
     ])
-    # singularities = np.array([
-    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-    #     0.2 * V[F[10, 0]] + 0.2 * V[F[10, 1]] + 0.6 * V[F[10, 2]]
-    # ])   
-    # singularities = np.array([
-    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]], 
-    #     V[E[100, 0]]
-    # ])
     indices = [1, 1, 1, 1, -1, -1]
     v_init = 10
     z_init = 1
-    
-    # V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
-    # singularities = np.array([
-    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-    #     0.6 * V[F[1, 0]] + 0.2 * V[F[1, 1]] + 0.2 * V[F[1, 2]], 
-    #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
-    #     0.6 * V[F[101, 0]] + 0.2 * V[F[101, 1]] + 0.2 * V[F[101, 2]]
-    # ])
-    # indices = [1, -1, 1, 1]
-    # v_init = 10
-    # z_init = 1j
-    
-    # V, F = load_off_file(os.path.join('..', 'data', 'cow.off'))
-    # singularities = np.array([
-    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-    #     0.6 * V[F[20, 0]] + 0.2 * V[F[20, 1]] + 0.2 * V[F[20, 2]], 
-    #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
-    #     0.6 * V[F[220, 0]] + 0.2 * V[F[220, 1]] + 0.2 * V[F[220, 2]]
-    # ])
-    # indices = [1, -1, 1, 1]
-    # v_init = 10
-    # z_init = 1j
-    
-    # A minimal triangulated tetrahedron
-    # V = np.array([
-    #     [1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]
-    # ], dtype=float)
-    # F = np.array([
-    #     [0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 3, 2]
-    # ])
-    # # singularities = np.array([[1/3, 1/3, -1/3], [-1, -1, 1]])
-    # # singularities = np.array([[1, 1, 1], [-1/3, -1/3, -1/3]])
-    # # singularities = np.array([[1/3, 1/3, -1/3]])
-    # singularities = np.array([
-    #     0.333 * V[F[0, 0]] + 0.333 * V[F[0, 1]] + 0.334 * V[F[0, 2]],
-    #     V[3]
-    # ])
-    # indices = [1, 1]
-    # v_init = 0
-    # z_init = 1
 
     mesh = Triangle_mesh(V, F)
     
@@ -90,7 +42,7 @@ if __name__ == '__main__':
     print(mesh.F_over_pi)
     
     posis, vectors = mesh.sample_points_and_vectors(
-        field, num_samples=3, margin=0.15, singular_detail=True, num_samples_detail=15, margin_detail=0.03
+        field, num_samples=3, margin=0.15, singular_detail=True, num_samples_detail=20, margin_detail=0.025
         )
     
     vectors /= np.linalg.norm(vectors, axis=1)[:, None]
@@ -99,12 +51,15 @@ if __name__ == '__main__':
     ps_mesh = ps.register_surface_mesh("Input Mesh", V, F)
 
     ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True, radius=0)
-    ps_field.add_vector_quantity('Field', vectors, enabled=True)
+    ps_field.add_vector_quantity('Field', vectors, enabled=True, length=0.005)
     
+    # for f in mesh.F_singular:
+    #     ps.register_point_cloud(f"Singularities{f}", np.array(mesh.singularities_f[f]), enabled=True, radius=0.002)
+        
     for f in mesh.F_over_pi:
         ps.register_surface_mesh(f"F_over_pi{f}", mesh.V_subdivided[f], mesh.F_subdivided[f], enabled=True)
     
-    ps.register_point_cloud("singularity marker", singularities, enabled=True)
+    ps.register_point_cloud("singularity marker", singularities, enabled=True, radius=0.002)
 
     ps.show()
             

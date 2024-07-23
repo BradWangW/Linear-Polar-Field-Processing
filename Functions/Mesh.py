@@ -257,30 +257,31 @@ class Triangle_mesh():
                         leave=False):
             # Recall each f_e is formed as v1 -> v2 -> v2 -> v1
             # so that v1 -> v2 is a twin edge and v1 -> v1 is a combinatorial edge
-            e1_comb = np.all(np.sort(self.E_comb, axis=1) == np.sort(f_e[[0, 3]]), axis=1)
-            e2_comb = np.all(np.sort(self.E_comb, axis=1) == np.sort(f_e[[1, 2]]), axis=1)
+            e1_comb = np.all(np.isin(self.E_comb, f_e[[0, 3]]), axis=1)
+            e2_comb = np.all(np.isin(self.E_comb, f_e[[1, 2]]), axis=1)
 
             vec_e = self.V_extended[f_e[1]] - self.V_extended[f_e[0]]
             
             f1_f = np.where(np.any(np.isin(self.F_f, f_e[0]), axis=1))[0]
             f2_f = np.where(np.any(np.isin(self.F_f, f_e[3]), axis=1))[0]
             
-            B1, B2, normals = compute_planes(self.V_extended, self.F_f[[f1_f, f2_f]][:, 0])
-            # f1 = self.F_f[f1_f]
-            # f2 = self.F_f[f2_f]
-        
+            B1, B2, normals = (self.B1[[f1_f, f2_f]].squeeze(), 
+                               self.B2[[f1_f, f2_f]].squeeze(), 
+                               self.normals[[f1_f, f2_f]].squeeze())
+            
             U = complex_projection(B1, B2, normals, vec_e[None, :])
             
             rotation = np.angle(U[1]) - np.angle(U[0])
+            # rotation = np.mod(rotation + np.pi, 2*np.pi) - np.pi
             
-            # The rotation is positive if the edge is aligned with the face
+            # The rotation is positive if the edge is aligned with the order face1 -> face2
             if np.all(self.E_comb[e1_comb] == f_e[[0, 3]]):
                 pair_rotations[e1_comb] = rotation
-            # The rotation is negative if the edge is opposite to the face
+            # The rotation is negative if the edge is opposite to the order, i.e. face2 -> face1
             elif np.all(self.E_comb[e1_comb] == f_e[[3, 0]]):
                 pair_rotations[e1_comb] = -rotation
             else:
-                raise ValueError(f'{self.E_comb[e1_comb]} and {f_e[[0, 3]]} do not match.')
+                raise ValueError(f'{self.E_comb[e1_comb]} and {f_e[[3, 0]]} do not match.')
             
             # The rotation is positive if the edge is aligned with the face
             if np.all(self.E_comb[e2_comb] == f_e[[1, 2]]):
@@ -308,11 +309,10 @@ class Triangle_mesh():
         self.F_singular = []
         self.singularities_f = {}
         self.indices_f = {}
+        self.V_singular = []
         
         mask_removed_f = np.ones(len(self.F_f) + len(self.F_e) + len(self.F_v), dtype=bool)
         mask_removed_e = np.ones(len(self.E_extended), dtype=bool)
-        
-        rhs_correction = np.zeros(len(self.F_f) + len(self.F_e) + len(self.F_v))
         
         # Function to compute rotations in singular faces and 
         # update the system for trivial connections
@@ -360,19 +360,6 @@ class Triangle_mesh():
             
             mask_removed_f[f] = False
             mask_removed_e[e_f] = False
-            
-            # For the other edge faces involving one of the computed edges, 
-            # the rhs of the system needs to minus the rotation of that edge
-            for j in range(3):
-                e_involved = np.where(e_f)[0][j]
-                
-                f_involved = len(self.F_f) + np.where(
-                    np.sum(np.isin(self.F_e, self.E_extended[e_f][j]), axis=1) == 2
-                )[0][0]
-                
-                affect_in_d1 = -self.d1[f_involved, e_involved]
-                
-                rhs_correction[f_involved] += affect_in_d1 * rotations[j]
         
         for singularity, index in tqdm(zip(singularities, indices), 
                                        desc='Processing singularities and computing thetas', 
@@ -398,6 +385,9 @@ class Triangle_mesh():
             
             # If the singularity is in a vertex, it gives the thetas for the incident faces
             if len(in_F_v) == 1:
+                if in_F_v[0] not in self.V_singular:
+                    self.V_singular.append(self.V_map[in_F_v[0]])
+                
                 # Loop over the faces incident to the vertex
                 for f in np.where(np.any(np.isin(self.F, in_F_v), axis=1))[0]:
                     deal_singularity(f, singularity, index)
@@ -409,9 +399,9 @@ class Triangle_mesh():
                     
                     for idx in [[0, 3], [1, 2]]:
                         e_sub = np.where(
-                            np.all(np.isin(self.E_extended, self.F_e[f_e][0, idx]), axis=1)
+                            np.all(np.isin(self.E_comb, self.F_e[f_e][0, idx]), axis=1)
                         )[0]
-                        mask_removed_e[e_sub] = False
+                        mask_removed_e[e_sub + len(self.E_twin)] = False
                     
                     mask_removed_f[len(self.F_f) + f_e] = False
                 
@@ -454,21 +444,31 @@ class Triangle_mesh():
                     )
                     
                     deal_singularity(f_neighbour, singularity_unfolded, index)
-                            
+                
+                # The face/edges of incident edge faces are zero and removed
+                for F_e in np.where(np.sum(np.isin(self.F_e, self.F_f[in_F_f]), axis=1) == 2)[0]:
+                    mask_removed_f[len(self.F_f) + F_e] = False
+                    
+                    e_comb1 = np.where(np.all(np.isin(self.E_comb, self.F_e[F_e, [0, 3]]), axis=1))[0]
+                    e_comb2 = np.where(np.all(np.isin(self.E_comb, self.F_e[F_e, [1, 2]]), axis=1))[0]
+                    
+                    mask_removed_e[e_comb1 + len(self.E_twin)] = False
+                    mask_removed_e[e_comb2 + len(self.E_twin)] = False
+                    
             else:
                 raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')
-                
+        
         # Independent quantities for quadratic programming
         Q = eye(np.sum(mask_removed_e), format='lil')
         c = np.zeros(np.sum(mask_removed_e))
         
         # Add more penalty for the combinatorial edges to reduce jumps
-        Q[len(self.E_twin):, len(self.E_twin):] *= 5
+        Q[len(self.E_twin):, len(self.E_twin):] *= 2
         Q = Q.tocoo()
         
         # Quantities for quadratic programming dependent on the singularities
         E = self.d1[mask_removed_f][:, mask_removed_e]
-        d = (2 * np.pi * self.I_F - self.G_F + rhs_correction)[mask_removed_f]
+        d = (2 * np.pi * self.I_F - self.G_F - self.d1 @ Theta)[mask_removed_f]
             
         # Define the system to solve the quadratic programming problem
         KKT_lhs = bmat([
@@ -498,11 +498,14 @@ class Triangle_mesh():
             Output:
                 Us: (num_V_extended, num_singularities) complex array of corner values
         '''
+        Theta_with_pairface = Theta.copy()
         if not Theta_include_pairface:
-            Theta_with_pairface = Theta.copy()
             Theta_with_pairface[len(self.E_twin):] += self.pair_rotations
-            # Theta = np.mod(Theta + np.pi, 2 * np.pi) - np.pi
             
+        U = np.zeros(len(self.V_extended), dtype=complex)
+        mask_removed_v = np.ones(len(self.V_extended), dtype=bool)
+        mask_removed_v[self.V_singular] = False
+
         lhs = lil_matrix((len(self.E_extended) + 1, len(self.V_extended)), dtype=complex)
         lhs[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = np.exp(1j * Theta_with_pairface)
         lhs[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
@@ -511,9 +514,11 @@ class Triangle_mesh():
         rhs = np.zeros(len(self.E_extended) + 1, dtype=complex)
         rhs[-1] = z_init / np.abs(z_init)
         
-        U, _, itn, r1norm = lsqr(lhs.tocsr(), rhs)[:4]
+        soln, _, itn, r1norm = lsqr(lhs[:, mask_removed_v], rhs)[:4]
         
-        U = U / np.abs(U)
+        soln /= np.abs(soln)
+        
+        U[mask_removed_v] = soln
             
         print(f'Corner reconstruction iterations and residuals',
               itn, r1norm)
@@ -538,12 +543,14 @@ class Triangle_mesh():
             # Only non-singular faces can be subdivided
             if f not in self.F_singular:
                 # the number of subdivisions is based on the edge with the largest rotation
+                num = (np.abs(Theta[e]) // np.pi + 1) * 2
+                
                 if f not in self.F_over_pi:
                     self.F_over_pi.append(f)
-                    num_subdivisions_f[f] = np.abs(Theta[e]) // np.pi + 1
+                    num_subdivisions_f[f] = num
                 else:
-                    if num_subdivisions_f[f] < np.abs(Theta[e]) // np.pi + 1:
-                        num_subdivisions_f[f] = np.abs(Theta[e]) // np.pi + 1
+                    if num_subdivisions_f[f] < num:
+                        num_subdivisions_f[f] = num
         
         self.U_subdivided = {}
         self.F_subdivided = {}
@@ -577,7 +584,7 @@ class Triangle_mesh():
                     w = (N - i - j) / N
                     
                     self.V_subdivided[f].append(u * V_f[0] + v * V_f[1] + w * V_f[2])
-                    self.U_subdivided[f].append(U_f[2] * np.exp(-1j * rotations[1] * v) * np.exp(-1j * rotations[0] * u))
+                    self.U_subdivided[f].append(U_f[2] * np.exp(-1j * rotations[1] * v) * np.exp(1j * rotations[2] * u))
             
             # Step 3: Create the list of triangles
             for i in range(N):
@@ -652,6 +659,9 @@ class Triangle_mesh():
                             [z_centre.real, -z_centre.imag, 1, 0],
                             [z_centre.imag, z_centre.real, 0, 1]
                         ], dtype=float)
+                        #     [Zf[0].real, -Zf[0].imag, 1, 0],
+                        #     [Zf[0].imag, Zf[0].real, 0, 1]
+                        # ], dtype=float)
                     elif index == -1:
                         lhs = np.array([
                             [zc.real, zc.imag, 1, 0],
@@ -659,12 +669,18 @@ class Triangle_mesh():
                             [z_centre.real, z_centre.imag, 1, 0],
                             [-z_centre.imag, z_centre.real, 0, 1]
                         ], dtype=float)
+                        #     [Zf[0].real, Zf[0].imag, 1, 0],
+                        #     [-Zf[0].imag, Zf[0].real, 0, 1]
+                        # ], dtype=float)
                     else:
                         raise ValueError('The field cannot handle face singularities with index > 1 or < -1 yet.')
                     
                     rhs = np.array([
                         0, 0, uf0.real, uf0.imag
                     ])
+                    # rhs = np.array([
+                    #     0, 0, -Uf[0].real, -Uf[0].imag
+                    # ])
                     
                     result, _, itn, err = lsqr(lhs, rhs)[:4]
                     coeffs_f[j, 0] = result[0] + 1j * result[1]
@@ -692,7 +708,7 @@ class Triangle_mesh():
                     prod_sub = np.conjugate(Uf_sub) * Zf_sub
                     
                     lhs = np.array([
-                        [prod_sub[0].imag, prod_sub[0].real, -Uf_sub[0].imag, Uf_sub[0].real],
+                        [prod_sub[2].imag, prod_sub[2].real, -Uf_sub[2].imag, Uf_sub[2].real],
                         [prod_sub[1].imag, prod_sub[1].real, -Uf_sub[1].imag, Uf_sub[1].real],
                         [Zf_sub[0].real, -Zf_sub[0].imag, 1, 0],
                         [Zf_sub[0].imag, Zf_sub[0].real, 0, 1]
