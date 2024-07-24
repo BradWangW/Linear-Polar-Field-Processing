@@ -4,13 +4,13 @@ from matplotlib.widgets import Slider
 
 # Define the complex vector field function
 def f(z, r, t):
-    return r*z ** t
+    return z * r * np.exp(1j * t) * (np.conj(z) - (1 + 1j))
 
 # Generate the grid of points
-num_coor = 50  # Number of axes directions
+num_coor = 30  # Number of axes directions
 
-X = np.linspace(-5, 5, num_coor)
-Y = np.linspace(-5, 5, num_coor)
+X = np.linspace(-3, 3, num_coor)
+Y = np.linspace(-3, 3, num_coor)
 
 X, Y = np.meshgrid(X, Y)    
 Z = X + 1j * Y

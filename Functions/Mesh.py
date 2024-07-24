@@ -385,8 +385,8 @@ class Triangle_mesh():
             
             # If the singularity is in a vertex, it gives the thetas for the incident faces
             if len(in_F_v) == 1:
-                if in_F_v[0] not in self.V_singular:
-                    self.V_singular.append(self.V_map[in_F_v[0]])
+                if self.V_map[in_F_v[0]][0] not in self.V_singular:
+                    self.V_singular += self.V_map[in_F_v[0]]
                 
                 # Loop over the faces incident to the vertex
                 for f in np.where(np.any(np.isin(self.F, in_F_v), axis=1))[0]:
@@ -462,8 +462,8 @@ class Triangle_mesh():
         Q = eye(np.sum(mask_removed_e), format='lil')
         c = np.zeros(np.sum(mask_removed_e))
         
-        # Add more penalty for the combinatorial edges to reduce jumps
-        Q[len(self.E_twin):, len(self.E_twin):] *= 2
+        # Penalty for the combinatorial edges to reduce jumps
+        Q[len(self.E_twin):, len(self.E_twin):] *= 1
         Q = Q.tocoo()
         
         # Quantities for quadratic programming dependent on the singularities
@@ -543,7 +543,7 @@ class Triangle_mesh():
             # Only non-singular faces can be subdivided
             if f not in self.F_singular:
                 # the number of subdivisions is based on the edge with the largest rotation
-                num = (np.abs(Theta[e]) // np.pi + 1) * 2
+                num = np.abs(Theta[e]) // (np.pi) + 1
                 
                 if f not in self.F_over_pi:
                     self.F_over_pi.append(f)
@@ -570,7 +570,7 @@ class Triangle_mesh():
             
             # Rotations u1 -> u2, u2 -> u3, u3 -> u1
             rotations = (np.roll(np.angle(U_f), -1) - np.angle(U_f)).squeeze()
-            rotations = np.mod(rotations + np.pi, 2*np.pi) - np.pi + 2 * np.pi * (N - 1) * signs
+            rotations = np.mod(rotations + np.pi, 2*np.pi) - np.pi + ((N - 1) * signs * np.pi)
             
             self.F_subdivided[f] = []
             self.V_subdivided[f] = []
