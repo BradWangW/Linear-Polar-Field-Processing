@@ -33,12 +33,13 @@ if __name__ == '__main__':
     v_init = 10
     z_init = 1
     
-    field = mesh.vector_field(
-        singularities, indices, v_init, z_init
-    )
+    U = mesh.corner_field(singularities, indices, v_init, z_init)
     
-    posis, vectors_complex, F_involved = mesh.sample_points_and_vectors(
-        field, num_samples=2, margin=0.25, singular_detail=False, return_complex=True
+    coeffs, coeffs_singular, coeffs_subdivided = mesh.reconstruct_linear_from_corners(U)
+    
+    posis, vectors_complex, F_involved = mesh.sample_field(
+        coeffs, coeffs_singular, coeffs_subdivided, num_samples=3, margin=0.15, 
+        singular_detail=True, num_samples_detail=10, margin_detail=0.05
     )
     
     B1, B2 = mesh.B1[F_involved], mesh.B2[F_involved]
@@ -53,15 +54,16 @@ if __name__ == '__main__':
     ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True, radius=0)
     ps_field.add_vector_quantity('Field', vectors, enabled=True, length=0.01)
     
-    # for f in mesh.F_singular:
-    #     ps.register_point_cloud(f"Singularities{f}", np.array(mesh.singularities_f[f]), enabled=True, radius=0.002)
-        
-    # for f in mesh.F_over_pi:
-    #     ps.register_surface_mesh(f"F_over_pi{f}", mesh.V_subdivided[f], mesh.F_subdivided[f], enabled=True)
-    
     ps.register_point_cloud("singularity marker", singularities, enabled=True, radius=0.002)
     
+    vectors_complex_unrot = vectors_complex.copy()
+    beta = 1
+    rot = 0
+    
     def callback():
+        
+        global beta, rot, indices, U, B1, B2, vectors_complex, vectors, posis, F_involved, vectors_complex_unrot
+        
         psim.PushItemWidth(150)
 
         # psim.TextUnformatted("Some sample text")
@@ -78,32 +80,36 @@ if __name__ == '__main__':
                 indices_new[i] = index
                 changed_idx = True
         
-        changed_rot, rot = psim.SliderFloat("Rotation", 0, v_min=-np.pi, v_max=np.pi)
+        changed_rot, rot = psim.SliderFloat("Rotation", rot, v_min=-np.pi, v_max=np.pi)
         
-        changed_beta, beta = psim.InputInt("beta", 1, step=1, step_fast=3)
+        changed_beta, beta = psim.InputFloat("beta", beta, step=0.25, step_fast=1)
         
-        if changed_rot or changed_idx or changed_beta:
-            if changed_idx or changed_beta:
-                field_new = mesh.vector_field(
-                    singularities, indices_new, v_init, z_init, Beta=np.full(len(F), beta)
-                )
+        if changed_idx or changed_beta:
+            if changed_idx:
+                U = mesh.corner_field(singularities, indices_new, v_init, z_init)
                 
-                _, vectors_complex_new, _ = mesh.sample_points_and_vectors(
-                    field_new, num_samples=2, margin=0.25, singular_detail=False, return_complex=True
-                )
+            coeffs, coeffs_singular, coeffs_subdivided = mesh.reconstruct_linear_from_corners(
+                U, Beta = np.full(U.shape[0], beta)
+            )
                 
-            else:
-                vectors_complex_new = vectors_complex.copy()
+            posis, vectors_complex, F_involved = mesh.sample_field(
+                coeffs, coeffs_singular, coeffs_subdivided, num_samples=3, margin=0.15, 
+                singular_detail=True, num_samples_detail=10, margin_detail=0.05
+            )
+
+            B1, B2 = mesh.B1[F_involved], mesh.B2[F_involved]
+            
+            vectors_complex_unrot = vectors_complex.copy()
                 
-            if changed_rot:
-                vectors_complex_new *= np.exp(1j * rot)
+        if changed_rot:
+            vectors_complex = np.exp(1j * rot) * vectors_complex_unrot
                 
-            vectors = vectors_complex_new.real[:, None] * B1 + vectors_complex_new.imag[:, None] * B2
-                
-            vectors /= np.linalg.norm(vectors, axis=1)[:, None]
-                
-            ps_field.remove_all_quantities()
-            ps_field.add_vector_quantity('Field', vectors, enabled=True, length=0.01)
+        vectors = vectors_complex.real[:, None] * B1 + vectors_complex.imag[:, None] * B2
+            
+        vectors /= np.linalg.norm(vectors, axis=1)[:, None]
+        
+        ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True, radius=0)
+        ps_field.add_vector_quantity('Field', vectors, enabled=True, length=0.01)
 
         psim.PopItemWidth()
 

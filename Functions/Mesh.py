@@ -731,7 +731,7 @@ class Triangle_mesh():
     
     def define_linear_field(self, coeffs, coeffs_singular, coeffs_subdivided):
         '''
-            Define the linear field from the coefficients.
+            Define the linear field from the coefficients (used for single sampling).
             Input:
                 coeffs: (num_F, num_singularities, 2) complex array of coefficients for the linear fields
                 indices_f: (num_singularities, ) array of indices for the singularities
@@ -784,7 +784,7 @@ class Triangle_mesh():
             a = (1 + self.Beta[F_involved[~mask]]) / 2
             b = (1 - self.Beta[F_involved[~mask]]) / 2
             vectors_complex[~mask] = a * coeffs[F_involved[~mask], 0] * Z[~mask] + \
-                b * coeffs[F_involved[~mask], 0] * np.conjugate(Z[~mask]) + \
+                b * np.conjugate(coeffs[F_involved[~mask], 0] * Z[~mask]) + \
                 coeffs[F_involved[~mask], 1]
             
             for i in idx_singular:
@@ -819,13 +819,115 @@ class Triangle_mesh():
         
         return linear_field
     
-    def vector_field(self, singularities, indices, v_init, z_init, Beta=None):
+    def sample_field(self, coeffs, coeffs_singular, coeffs_subdivided,
+        num_samples=3, margin = 0.15, singular_detail=False, 
+        num_samples_detail=10, margin_detail=0.05):
+        
+        def field(X, f_involved):
+            '''
+                X: (:, 3) array of 3D points
+            ''' 
+            Z = complex_projection(
+                self.B1[f_involved], self.B2[f_involved], self.normals[f_involved],
+                X - self.V_extended[self.F_f[f_involved, 0]], 
+                diagonal=True
+            )
+            
+            a = (1 + self.Beta[f_involved]) / 2
+            b = (1 - self.Beta[f_involved]) / 2
+            return a * coeffs[f_involved, 0] * Z +\
+                b * np.conjugate(coeffs[f_involved, 0] * Z) + coeffs[f_involved, 1]
+        
+        points = []
+        vectors_complex = []
+        F_involved = []
+        F_trivial = np.setdiff1d(np.arange(len(self.F)), np.unique(self.F_singular + self.F_over_pi))
+        
+        if not singular_detail:
+            num_samples_detail = num_samples
+            margin_detail = margin
+            
+        U = []; V = []; W = []
+        for j in range(num_samples_detail):
+            for k in range(num_samples_detail - j):
+                # Barycentric coordinates
+                U.append(margin_detail + (j / (num_samples_detail-1)) * (1 - 3 * margin_detail))
+                V.append(margin_detail + (k / (num_samples_detail-1)) * (1 - 3 * margin_detail))
+                W.append(1 - U[-1] - V[-1])
+        U = np.array(U); V = np.array(V); W = np.array(W)
+                
+        for f in tqdm(np.unique(self.F_singular + self.F_over_pi),
+                        desc='Sampling dense points and vectors', 
+                        total=len(self.F), 
+                        leave=False):
+        
+            # Interpolate to get the 3D point in the face
+            points += (
+                U[:, None] * self.V[self.F[f, 0]][None, :] + \
+                    V[:, None] * self.V[self.F[f, 1]][None, :] + \
+                        W[:, None] * self.V[self.F[f, 2]][None, :]
+            ).tolist()
+            F_involved += [f] * len(U)
+            
+            Z = complex_projection(
+                self.B1[[f] * len(U)], self.B2[[f] * len(U)], self.normals[[f] * len(U)],
+                points[-len(U):] - self.V_extended[self.F_f[f, 0]], 
+                diagonal=True
+            )
+        
+            if f in self.F_singular:
+                prod = 1
+                for j, index in enumerate(self.indices_f[f]):
+                    coeff_singular = coeffs_singular[f][j]
+                    if index == 1:
+                        prod *= coeff_singular[0] * Z + coeff_singular[1]
+                    elif index == -1:
+                        prod *= coeff_singular[0] * np.conjugate(Z) + coeff_singular[1]
+                    else:
+                        raise ValueError('Singularities with index > 1 or < -1 should have been decomposed.')
+                    
+                vectors_complex += prod.tolist()
+            
+            elif f in self.F_over_pi:
+                f_sub_involved = is_in_face(self.V_subdivided[f], self.F_subdivided[f], points[-len(U):], include_EV=True)
+                
+                vectors_complex += (
+                    coeffs_subdivided[f][f_sub_involved, 0] * Z + coeffs_subdivided[f][f_sub_involved, 1]
+                ).tolist()
+                
+            else:
+                raise ValueError(f'The {f}-th face is not singular or over pi. (araised in sampling)')
+        
+        for j in tqdm(range(num_samples), desc='Sampling rest points and vectors', 
+                      total=num_samples, leave=False):
+            for k in range(num_samples - j):
+                # Barycentric coordinates
+                u = margin + (j / (num_samples-1)) * (1 - 3 * margin)
+                v = margin + (k / (num_samples-1)) * (1 - 3 * margin)
+                w = 1 - u - v
+                print(u, v, w)
+                
+                # Interpolate to get the 3D point in the face
+                points += (
+                    u * self.V[self.F[F_trivial, 0]] + \
+                        v * self.V[self.F[F_trivial, 1]] + \
+                            w * self.V[self.F[F_trivial, 2]]
+                ).tolist()
+                F_involved += F_trivial.tolist()
+                vectors_complex += field(points[-len(F_trivial):], F_trivial).tolist()
+
+        return np.array(points), np.array(vectors_complex), np.array(F_involved)
+    
+    def corner_field(self, singularities, indices, v_init, z_init):
         Theta = self.compute_thetas(singularities=singularities, indices=indices)
         
         U = self.reconstruct_corners_from_thetas(Theta, v_init, z_init)
         
         self.subdivide_faces_over_pi(Theta, U)
         
+        return U
+    
+    def vector_field(self, U, Beta=None):
         coeffs, coeffs_singular, coeffs_subdivided = self.reconstruct_linear_from_corners(U, Beta=Beta)
             
         field = self.define_linear_field(coeffs, coeffs_singular, coeffs_subdivided)
