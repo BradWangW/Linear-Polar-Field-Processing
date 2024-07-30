@@ -651,9 +651,6 @@ class Triangle_mesh():
                     rhs = np.array([
                         0, 0, uf0.real, uf0.imag
                     ])
-                    # rhs = np.array([
-                    #     0, 0, -Uf[0].real, -Uf[0].imag
-                    # ])
                     
                     result, _, itn, err = lsqr(lhs, rhs)[:4]
                     coeffs_f[j, 0] = result[0] + 1j * result[1]
@@ -905,7 +902,6 @@ class Triangle_mesh():
                 u = margin + (j / (num_samples-1)) * (1 - 3 * margin)
                 v = margin + (k / (num_samples-1)) * (1 - 3 * margin)
                 w = 1 - u - v
-                print(u, v, w)
                 
                 # Interpolate to get the 3D point in the face
                 points += (
