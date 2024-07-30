@@ -394,11 +394,48 @@ class Triangle_mesh():
             
             # If the singularity is in a vertex, it gives the thetas for the incident faces
             if len(in_F_v) == 1:
-                self.I_F[len(self.F_f) + len(self.F_e) + in_F_v[0]] = index
+                # self.I_F[len(self.F_f) + len(self.F_e) + in_F_v[0]] = index
+                if self.V_map[in_F_v[0]][0] not in self.V_singular:
+                    self.V_singular += self.V_map[in_F_v[0]]
+                
+                # Loop over the faces incident to the vertex
+                for f in np.where(np.any(np.isin(self.F, in_F_v), axis=1))[0]:
+                    deal_singularity(f, singularity, index)
+                
+                for e_comb in self.F_v_map_E_comb[in_F_v[0]]:
+                    f_e = np.where(
+                        np.sum(np.isin(self.F_e, self.E_comb[e_comb]), axis=1) == 2
+                    )[0]
+                    
+                    for idx in [[0, 3], [1, 2]]:
+                        e_sub = np.where(
+                            np.all(np.isin(self.E_comb, self.F_e[f_e][0, idx]), axis=1)
+                        )[0]
+                        mask_removed_e[e_sub + len(self.E_twin)] = False
+                    
+                    mask_removed_f[len(self.F_f) + f_e] = False
+                
+                mask_removed_f[len(self.F_f) + len(self.F_e) + in_F_v[0]] = False
                 
             # If the singularity is in an edge, it gives the thetas for the incident faces
             elif len(in_F_e) == 1:
-                self.I_F[len(self.F_f) + in_F_e[0]] = index
+                # self.I_F[len(self.F_f) + in_F_e[0]] = index
+                # Loop over the two faces incident to the edge
+                for i in range(2):
+                    e = self.F_e[in_F_e[0]][2*i:2*(i+1)]
+                    f = np.where(
+                        np.sum(np.isin(self.F_f, e), axis=1) == 2
+                    )[0][0]
+                    
+                    deal_singularity(f, singularity, index)
+                    
+                    comb = [[0, 3], [1, 2]][i]
+                    e_comb = np.where(
+                        np.all(np.isin(self.E_comb, self.F_e[in_F_e[0]][comb]), axis=1)
+                    )[0]
+                    mask_removed_e[e_comb + len(self.E_twin)] = False
+                
+                mask_removed_f[len(self.F_f) + in_F_e[0]] = False
                     
             # If the singularity is in a face, it gives thetas for the face
             elif in_F_f is not False:
@@ -407,28 +444,28 @@ class Triangle_mesh():
                 for _ in range(abs(index)):
                     deal_singularity(in_F_f, singularity, np.sign(index), in_face=True)
                 
-                # for i in range(3):
-                #     common_edge = np.stack([self.F[in_F_f], np.roll(self.F[in_F_f], -1)], axis=1)[i]
-                #     f_neighbour = np.where(np.sum(np.isin(self.F, common_edge), axis=1) == 2)[0]
-                #     f_neighbour = f_neighbour[f_neighbour != in_F_f][0]
+                for i in range(3):
+                    common_edge = np.stack([self.F[in_F_f], np.roll(self.F[in_F_f], -1)], axis=1)[i]
+                    f_neighbour = np.where(np.sum(np.isin(self.F, common_edge), axis=1) == 2)[0]
+                    f_neighbour = f_neighbour[f_neighbour != in_F_f][0]
                     
-                #     v_far = self.V[np.setdiff1d(self.F[f_neighbour], common_edge)].squeeze()
+                    v_far = self.V[np.setdiff1d(self.F[f_neighbour], common_edge)].squeeze()
                     
-                #     singularity_unfolded = compute_unfolded_vertex(
-                #         v_far, self.V[common_edge[0]], self.V[common_edge[1]], singularity
-                #     )
+                    singularity_unfolded = compute_unfolded_vertex(
+                        v_far, self.V[common_edge[0]], self.V[common_edge[1]], singularity
+                    )
                     
-                #     deal_singularity(f_neighbour, singularity_unfolded, index)
+                    deal_singularity(f_neighbour, singularity_unfolded, index)
                 
-                # # The face/edges of incident edge faces are zero and removed
-                # for F_e in np.where(np.sum(np.isin(self.F_e, self.F_f[in_F_f]), axis=1) == 2)[0]:
-                #     mask_removed_f[len(self.F_f) + F_e] = False
+                # The face/edges of incident edge faces are zero and removed
+                for F_e in np.where(np.sum(np.isin(self.F_e, self.F_f[in_F_f]), axis=1) == 2)[0]:
+                    mask_removed_f[len(self.F_f) + F_e] = False
                     
-                #     e_comb1 = np.where(np.all(np.isin(self.E_comb, self.F_e[F_e, [0, 3]]), axis=1))[0]
-                #     e_comb2 = np.where(np.all(np.isin(self.E_comb, self.F_e[F_e, [1, 2]]), axis=1))[0]
+                    e_comb1 = np.where(np.all(np.isin(self.E_comb, self.F_e[F_e, [0, 3]]), axis=1))[0]
+                    e_comb2 = np.where(np.all(np.isin(self.E_comb, self.F_e[F_e, [1, 2]]), axis=1))[0]
                     
-                #     mask_removed_e[e_comb1 + len(self.E_twin)] = False
-                #     mask_removed_e[e_comb2 + len(self.E_twin)] = False
+                    mask_removed_e[e_comb1 + len(self.E_twin)] = False
+                    mask_removed_e[e_comb2 + len(self.E_twin)] = False
                     
             else:
                 raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')
@@ -610,10 +647,6 @@ class Triangle_mesh():
             
             Uf = U[f]
             prod = np.conjugate(Uf) * Zf
-            
-            z_centre = np.mean(Zf)
-            U_centre = np.mean(Uf)
-            U_centre = U_centre / np.abs(U_centre)
 
             # If the face is singular, the last row explicitly specifies 
             # the singularity (zero point of the field)
@@ -621,10 +654,27 @@ class Triangle_mesh():
                 coeffs_f = np.zeros((len(self.singularities_f[i]), 2), dtype=complex)
                 sub_itn = 0
                 
+                Zc = np.array([
+                    complex_projection(
+                        b1, b2, normal, 
+                        np.array([singularity - self.V_extended[f[0]]])
+                    )[0, 0] for singularity in self.singularities_f[i]
+                ])
+                
+                counter = 0
+                for zf, uf in zip(Zf, Uf):
+                    if zf not in Zc:
+                        zj = zf
+                        uj = np.exp(1j * (np.angle(uf) / len(self.singularities_f[i])))
+                        break
+                    counter += 1
+                if counter == 3:
+                    raise ValueError('The face cannot have any of the three corners as singularities.')
+                    
                 # Divide the argument of the firsr corner by the number of singularities on that face
                 # so that the first corner, after the multiplicative superposition,
                 # aligns with the first corner of the face
-                uf0 = np.exp(1j * np.angle(U_centre) / len(self.singularities_f[i]))
+                # Uf_partitioned = np.exp(1j * (np.angle(Uf) / len(self.singularities_f[i])))
                 for j, (singularity, index) in enumerate(zip(self.singularities_f[i], self.indices_f[i])):
                     zc = complex_projection(
                         b1, b2, normal, 
@@ -635,21 +685,21 @@ class Triangle_mesh():
                         lhs = np.array([
                             [zc.real, -zc.imag, 1, 0],
                             [zc.imag, zc.real, 0, 1],
-                            [z_centre.real, -z_centre.imag, 1, 0],
-                            [z_centre.imag, z_centre.real, 0, 1]
+                            [zj.real, -zj.imag, 1, 0],
+                            [zj.imag, zj.real, 0, 1]
                         ], dtype=float)
                     elif index == -1:
                         lhs = np.array([
                             [zc.real, zc.imag, 1, 0],
                             [-zc.imag, zc.real, 0, 1],
-                            [z_centre.real, z_centre.imag, 1, 0],
-                            [-z_centre.imag, z_centre.real, 0, 1]
+                            [zj.real, j.imag, 1, 0],
+                            [-zj.imag, zj.real, 0, 1]
                         ], dtype=float)
                     else:
                         raise ValueError('The field cannot handle face singularities with index > 1 or < -1 yet.')
                     
                     rhs = np.array([
-                        0, 0, uf0.real, uf0.imag
+                        0, 0, uj.real, uj.imag
                     ])
                     
                     result, _, itn, err = lsqr(lhs, rhs)[:4]
@@ -701,6 +751,8 @@ class Triangle_mesh():
             # value up to +-sign and scale, as for the other two corners
             else:
                 beta = Beta[i]  
+                a = (1 + beta) / 2
+                b = (1 - beta) / 2
                 prod_complete = (beta * Uf.real + 1j * Uf.imag) * np.conjugate(Zf)
                 
                 lhs = np.array([
@@ -720,7 +772,7 @@ class Triangle_mesh():
                 mean_itn += itn/len(self.F_f)
 
         print(f'Linear field reconstruction mean iterations and total residuals',
-              mean_itn, total_err)
+              round(mean_itn, 3), total_err)
         
         self.Beta = Beta
         

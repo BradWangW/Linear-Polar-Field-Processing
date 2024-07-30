@@ -23,13 +23,13 @@ if __name__ == '__main__':
         0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
         0.6 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.2 * V[F[70, 2]],
         V[F[205, 0]],
-        0.2 * V[F[200, 0]] + 0.2 * V[F[200, 1]] + 0.6 * V[F[200, 2]],
+        0.2 * V[F[205, 0]] + 0.2 * V[F[205, 1]] + 0.6 * V[F[205, 2]],
         0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
         0.6 * V[F[103, 0]] + 0.2 * V[F[103, 1]] + 0.2 * V[F[103, 2]],
         (V[E[100, 0]] + V[E[100, 1]])/2,
         0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]]
     ])
-    indices = [1, -1, 1, 1, 1, -1, -1, 1]
+    indices = [-1, 1, -1, 1, 1, 1, -1, 1]
     v_init = 10
     z_init = 1
     
@@ -83,13 +83,18 @@ if __name__ == '__main__':
         changed_rot, rot = psim.SliderFloat("Rotation", rot, v_min=-np.pi, v_max=np.pi)
         
         changed_beta, beta = psim.InputFloat("beta", beta, step=0.25, step_fast=1)
+        Beta = np.full(U.shape[0], beta)
+        
+        if(psim.Button("Randomise Beta")):
+            Beta = np.random.uniform(-1, 1, U.shape[0])
+            changed_beta = True
         
         if changed_idx or changed_beta:
             if changed_idx:
                 U = mesh.corner_field(singularities, indices_new, v_init, z_init)
                 
             coeffs, coeffs_singular, coeffs_subdivided = mesh.reconstruct_linear_from_corners(
-                U, Beta = np.full(U.shape[0], beta)
+                U, Beta = Beta
             )
                 
             posis, vectors_complex, F_involved = mesh.sample_field(
