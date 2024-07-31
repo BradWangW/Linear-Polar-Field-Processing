@@ -394,7 +394,7 @@ class Triangle_mesh():
             
             # If the singularity is in a vertex, it gives the thetas for the incident faces
             if len(in_F_v) == 1:
-                # self.I_F[len(self.F_f) + len(self.F_e) + in_F_v[0]] = index
+                # self.I_F[len(self.F_f) + len(self.F_e) + in_F_v[0]] = -index
                 if self.V_map[in_F_v[0]][0] not in self.V_singular:
                     self.V_singular += self.V_map[in_F_v[0]]
                 
@@ -419,7 +419,7 @@ class Triangle_mesh():
                 
             # If the singularity is in an edge, it gives the thetas for the incident faces
             elif len(in_F_e) == 1:
-                # self.I_F[len(self.F_f) + in_F_e[0]] = index
+                # self.I_F[len(self.F_f) + in_F_e[0]] = -index
                 # Loop over the two faces incident to the edge
                 for i in range(2):
                     e = self.F_e[in_F_e[0]][2*i:2*(i+1)]
@@ -674,7 +674,6 @@ class Triangle_mesh():
                 # Divide the argument of the firsr corner by the number of singularities on that face
                 # so that the first corner, after the multiplicative superposition,
                 # aligns with the first corner of the face
-                # Uf_partitioned = np.exp(1j * (np.angle(Uf) / len(self.singularities_f[i])))
                 for j, (singularity, index) in enumerate(zip(self.singularities_f[i], self.indices_f[i])):
                     zc = complex_projection(
                         b1, b2, normal, 
@@ -717,6 +716,7 @@ class Triangle_mesh():
                 v0 = self.V_extended[f[0]]
                 coeffs_f = np.zeros((len(self.F_subdivided[i]), 2), dtype=complex)
                 sub_itn = 0
+                beta = Beta[i]  
                 
                 # For each subdivided face, the last row aligns the first corner
                 for j, f_sub in enumerate(self.F_subdivided[i]):
@@ -725,13 +725,13 @@ class Triangle_mesh():
                     )[0]
                     
                     Uf_sub = self.U_subdivided[i][f_sub]
-                    prod_sub = np.conjugate(Uf_sub) * Zf_sub
+                    prod_sub = (beta * Uf_sub.real + 1j * Uf_sub.imag) * np.conjugate(Zf_sub)
                     
                     lhs = np.array([
-                        [prod_sub[2].imag, prod_sub[2].real, -Uf_sub[2].imag, Uf_sub[2].real],
-                        [prod_sub[1].imag, prod_sub[1].real, -Uf_sub[1].imag, Uf_sub[1].real],
+                        [prod_sub[2].imag, -prod_sub[2].real, Uf_sub[2].imag, -Uf_sub[2].real],
+                        [prod_sub[1].imag, -prod_sub[1].real, Uf_sub[1].imag, -Uf_sub[1].real],
                         [Zf_sub[0].real, -Zf_sub[0].imag, 1, 0],
-                        [Zf_sub[0].imag, Zf_sub[0].real, 0, 1]
+                        [beta * Zf_sub[0].imag, beta * Zf_sub[0].real, 0, 1]
                     ], dtype=float)
                     rhs = np.array([
                         0, 0, Uf_sub[0].real, Uf_sub[0].imag
@@ -751,8 +751,6 @@ class Triangle_mesh():
             # value up to +-sign and scale, as for the other two corners
             else:
                 beta = Beta[i]  
-                a = (1 + beta) / 2
-                b = (1 - beta) / 2
                 prod_complete = (beta * Uf.real + 1j * Uf.imag) * np.conjugate(Zf)
                 
                 lhs = np.array([
@@ -938,8 +936,12 @@ class Triangle_mesh():
                 vectors_complex += prod.tolist()
             
             elif f in self.F_over_pi:
-                f_sub_involved = is_in_face(self.V_subdivided[f], self.F_subdivided[f], points[-len(U):], include_EV=True)
-                
+                f_sub_involved = []
+                for i in range(len(U)):
+                    f_sub_involved.append(
+                        is_in_face(self.V_subdivided[f], self.F_subdivided[f], np.array(points[-len(U):])[i])
+                    )
+                    
                 vectors_complex += (
                     coeffs_subdivided[f][f_sub_involved, 0] * Z + coeffs_subdivided[f][f_sub_involved, 1]
                 ).tolist()
