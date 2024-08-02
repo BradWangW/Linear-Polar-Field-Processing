@@ -26,9 +26,16 @@ class Triangle_mesh():
         self.B1, self.B2, self.normals = compute_planes(V, F)
         
     def initialise_field_processing(self):
-        self.construct_extended_mesh()
-        self.construct_d1_extended()
-        self.compute_face_pair_rotation()
+        steps = [
+            self.construct_extended_mesh,
+            self.construct_d1_extended,
+            self.compute_face_pair_rotation
+        ]
+        for step in tqdm(steps, 
+                         desc='Initialising field processing', 
+                         total=len(steps),
+                         leave=False):
+            step()
     
     def construct_extended_mesh(self):
         '''
@@ -365,6 +372,8 @@ class Triangle_mesh():
                                        desc='Processing singularities and computing thetas', 
                                        total=len(singularities), 
                                        leave=False):
+            if index == 0:
+                continue
             
             in_F_v = np.where(
                 np.all(np.isclose(self.V, singularity[None, :]), axis=1)
@@ -385,6 +394,7 @@ class Triangle_mesh():
             
             # If the singularity is in a vertex, it gives the thetas for the incident faces
             if len(in_F_v) == 1:
+                # self.I_F[len(self.F_f) + len(self.F_e) + in_F_v[0]] = -index
                 if self.V_map[in_F_v[0]][0] not in self.V_singular:
                     self.V_singular += self.V_map[in_F_v[0]]
                 
@@ -409,6 +419,7 @@ class Triangle_mesh():
                 
             # If the singularity is in an edge, it gives the thetas for the incident faces
             elif len(in_F_e) == 1:
+                # self.I_F[len(self.F_f) + in_F_e[0]] = -index
                 # Loop over the two faces incident to the edge
                 for i in range(2):
                     e = self.F_e[in_F_e[0]][2*i:2*(i+1)]
@@ -430,7 +441,8 @@ class Triangle_mesh():
             elif in_F_f is not False:
                 # Obtain the neighbour faces of the face containing the singularity
                 # and the unfolded locations of the singularity on those faces
-                deal_singularity(in_F_f, singularity, index, in_face=True)
+                for _ in range(abs(index)):
+                    deal_singularity(in_F_f, singularity, np.sign(index), in_face=True)
                 
                 for i in range(3):
                     common_edge = np.stack([self.F[in_F_f], np.roll(self.F[in_F_f], -1)], axis=1)[i]
@@ -478,6 +490,7 @@ class Triangle_mesh():
         KKT_rhs = np.concatenate([-c, d])
         
         # Solve the quadratic programming problem
+        print('Solving for the thetas...')
         solution, _, itn, r1norm = lsqr(KKT_lhs, KKT_rhs)[:4]
         
         Theta[mask_removed_e] = solution[:np.sum(mask_removed_e)]
@@ -605,7 +618,7 @@ class Triangle_mesh():
             self.V_subdivided[f] = np.array(self.V_subdivided[f])
             self.U_subdivided[f] = np.array(self.U_subdivided[f])
     
-    def reconstruct_linear_from_corners(self, U):
+    def reconstruct_linear_from_corners(self, U, Beta=None):
         '''
             Reconstruct the coefficients of the linear field from the corner values.
             Input:
@@ -614,6 +627,9 @@ class Triangle_mesh():
             Output:
                 coeffs: (num_F, 2) complex array of coefficients for the linear fields
         '''
+        if Beta is None:
+            Beta = np.ones(len(self.F_f))
+            
         coeffs = np.zeros((len(self.F_f), 2), dtype=complex)
         coeffs_singular = {}
         coeffs_subdivided = {}
@@ -631,10 +647,6 @@ class Triangle_mesh():
             
             Uf = U[f]
             prod = np.conjugate(Uf) * Zf
-            
-            z_centre = np.mean(Zf)
-            U_centre = np.mean(Uf)
-            U_centre = U_centre / np.abs(U_centre)
 
             # If the face is singular, the last row explicitly specifies 
             # the singularity (zero point of the field)
@@ -642,10 +654,26 @@ class Triangle_mesh():
                 coeffs_f = np.zeros((len(self.singularities_f[i]), 2), dtype=complex)
                 sub_itn = 0
                 
+                Zc = np.array([
+                    complex_projection(
+                        b1, b2, normal, 
+                        np.array([singularity - self.V_extended[f[0]]])
+                    )[0, 0] for singularity in self.singularities_f[i]
+                ])
+                
+                counter = 0
+                for zf, uf in zip(Zf, Uf):
+                    if zf not in Zc:
+                        zj = zf
+                        uj = np.exp(1j * (np.angle(uf) / len(self.singularities_f[i])))
+                        break
+                    counter += 1
+                if counter == 3:
+                    raise ValueError('The face cannot have any of the three corners as singularities.')
+                    
                 # Divide the argument of the firsr corner by the number of singularities on that face
                 # so that the first corner, after the multiplicative superposition,
                 # aligns with the first corner of the face
-                uf0 = np.exp(1j * np.angle(U_centre) / len(self.singularities_f[i]))
                 for j, (singularity, index) in enumerate(zip(self.singularities_f[i], self.indices_f[i])):
                     zc = complex_projection(
                         b1, b2, normal, 
@@ -656,31 +684,22 @@ class Triangle_mesh():
                         lhs = np.array([
                             [zc.real, -zc.imag, 1, 0],
                             [zc.imag, zc.real, 0, 1],
-                            [z_centre.real, -z_centre.imag, 1, 0],
-                            [z_centre.imag, z_centre.real, 0, 1]
+                            [zj.real, -zj.imag, 1, 0],
+                            [zj.imag, zj.real, 0, 1]
                         ], dtype=float)
-                        #     [Zf[0].real, -Zf[0].imag, 1, 0],
-                        #     [Zf[0].imag, Zf[0].real, 0, 1]
-                        # ], dtype=float)
                     elif index == -1:
                         lhs = np.array([
                             [zc.real, zc.imag, 1, 0],
                             [-zc.imag, zc.real, 0, 1],
-                            [z_centre.real, z_centre.imag, 1, 0],
-                            [-z_centre.imag, z_centre.real, 0, 1]
+                            [zj.real, j.imag, 1, 0],
+                            [-zj.imag, zj.real, 0, 1]
                         ], dtype=float)
-                        #     [Zf[0].real, Zf[0].imag, 1, 0],
-                        #     [-Zf[0].imag, Zf[0].real, 0, 1]
-                        # ], dtype=float)
                     else:
                         raise ValueError('The field cannot handle face singularities with index > 1 or < -1 yet.')
                     
                     rhs = np.array([
-                        0, 0, uf0.real, uf0.imag
+                        0, 0, uj.real, uj.imag
                     ])
-                    # rhs = np.array([
-                    #     0, 0, -Uf[0].real, -Uf[0].imag
-                    # ])
                     
                     result, _, itn, err = lsqr(lhs, rhs)[:4]
                     coeffs_f[j, 0] = result[0] + 1j * result[1]
@@ -697,6 +716,7 @@ class Triangle_mesh():
                 v0 = self.V_extended[f[0]]
                 coeffs_f = np.zeros((len(self.F_subdivided[i]), 2), dtype=complex)
                 sub_itn = 0
+                beta = Beta[i]  
                 
                 # For each subdivided face, the last row aligns the first corner
                 for j, f_sub in enumerate(self.F_subdivided[i]):
@@ -705,13 +725,13 @@ class Triangle_mesh():
                     )[0]
                     
                     Uf_sub = self.U_subdivided[i][f_sub]
-                    prod_sub = np.conjugate(Uf_sub) * Zf_sub
+                    prod_sub = (beta * Uf_sub.real + 1j * Uf_sub.imag) * np.conjugate(Zf_sub)
                     
                     lhs = np.array([
-                        [prod_sub[2].imag, prod_sub[2].real, -Uf_sub[2].imag, Uf_sub[2].real],
-                        [prod_sub[1].imag, prod_sub[1].real, -Uf_sub[1].imag, Uf_sub[1].real],
+                        [prod_sub[2].imag, -prod_sub[2].real, Uf_sub[2].imag, -Uf_sub[2].real],
+                        [prod_sub[1].imag, -prod_sub[1].real, Uf_sub[1].imag, -Uf_sub[1].real],
                         [Zf_sub[0].real, -Zf_sub[0].imag, 1, 0],
-                        [Zf_sub[0].imag, Zf_sub[0].real, 0, 1]
+                        [beta * Zf_sub[0].imag, beta * Zf_sub[0].real, 0, 1]
                     ], dtype=float)
                     rhs = np.array([
                         0, 0, Uf_sub[0].real, Uf_sub[0].imag
@@ -730,11 +750,14 @@ class Triangle_mesh():
             # If the face is not singular, the last row aligns the first corner 
             # value up to +-sign and scale, as for the other two corners
             else:
+                beta = Beta[i]  
+                prod_complete = (beta * Uf.real + 1j * Uf.imag) * np.conjugate(Zf)
+                
                 lhs = np.array([
-                    [prod[2].imag, prod[2].real, -Uf[2].imag, Uf[2].real],
-                    [prod[1].imag, prod[1].real, -Uf[1].imag, Uf[1].real],
+                    [prod_complete[2].imag, -prod_complete[2].real, Uf[2].imag, -Uf[2].real],
+                    [prod_complete[1].imag, -prod_complete[1].real, Uf[1].imag, -Uf[1].real],
                     [Zf[0].real, -Zf[0].imag, 1, 0],
-                    [Zf[0].imag, Zf[0].real, 0, 1]
+                    [beta * Zf[0].imag, beta * Zf[0].real, 0, 1]
                 ], dtype=float)
                 rhs = np.array([
                     0, 0, Uf[0].real, Uf[0].imag
@@ -747,13 +770,15 @@ class Triangle_mesh():
                 mean_itn += itn/len(self.F_f)
 
         print(f'Linear field reconstruction mean iterations and total residuals',
-              mean_itn, total_err)
+              round(mean_itn, 3), total_err)
+        
+        self.Beta = Beta
         
         return coeffs, coeffs_singular, coeffs_subdivided
     
     def define_linear_field(self, coeffs, coeffs_singular, coeffs_subdivided):
         '''
-            Define the linear field from the coefficients.
+            Define the linear field from the coefficients (used for single sampling).
             Input:
                 coeffs: (num_F, num_singularities, 2) complex array of coefficients for the linear fields
                 indices_f: (num_singularities, ) array of indices for the singularities
@@ -761,7 +786,7 @@ class Triangle_mesh():
                 linear_field: function of the linear field
         '''
 
-        def linear_field(posis):
+        def linear_field(posis, return_complex=False):
 
             # Find the faces where the points are located
             # For points on vertices or edges, all adjacent faces are considered
@@ -803,7 +828,11 @@ class Triangle_mesh():
             )
             
             vectors_complex = np.zeros(len(posis_extended), dtype=complex)
-            vectors_complex[~mask] = coeffs[F_involved[~mask], 0] * Z[~mask] + coeffs[F_involved[~mask], 1]
+            a = (1 + self.Beta[F_involved[~mask]]) / 2
+            b = (1 - self.Beta[F_involved[~mask]]) / 2
+            vectors_complex[~mask] = a * coeffs[F_involved[~mask], 0] * Z[~mask] + \
+                b * np.conjugate(coeffs[F_involved[~mask], 0] * Z[~mask]) + \
+                coeffs[F_involved[~mask], 1]
             
             for i in idx_singular:
                 f = F_involved[i]
@@ -830,18 +859,126 @@ class Triangle_mesh():
 
             vectors = B1 * vectors_complex.real[:, None] + B2 * vectors_complex.imag[:, None]
 
-            return posis_extended, vectors
+            if return_complex:
+                return posis_extended, vectors_complex, F_involved
+            else:
+                return posis_extended, vectors
         
         return linear_field
     
-    def vector_field(self, singularities, indices, v_init, z_init):
+    def sample_field(self, coeffs, coeffs_singular, coeffs_subdivided,
+        num_samples=3, margin = 0.15, singular_detail=False, 
+        num_samples_detail=10, margin_detail=0.05):
+        
+        def field(X, f_involved):
+            '''
+                X: (:, 3) array of 3D points
+            ''' 
+            Z = complex_projection(
+                self.B1[f_involved], self.B2[f_involved], self.normals[f_involved],
+                X - self.V_extended[self.F_f[f_involved, 0]], 
+                diagonal=True
+            )
+            
+            a = (1 + self.Beta[f_involved]) / 2
+            b = (1 - self.Beta[f_involved]) / 2
+            return a * coeffs[f_involved, 0] * Z +\
+                b * np.conjugate(coeffs[f_involved, 0] * Z) + coeffs[f_involved, 1]
+        
+        points = []
+        vectors_complex = []
+        F_involved = []
+        F_trivial = np.setdiff1d(np.arange(len(self.F)), np.unique(self.F_singular + self.F_over_pi))
+        
+        if not singular_detail:
+            num_samples_detail = num_samples
+            margin_detail = margin
+            
+        U = []; V = []; W = []
+        for j in range(num_samples_detail):
+            for k in range(num_samples_detail - j):
+                # Barycentric coordinates
+                U.append(margin_detail + (j / (num_samples_detail-1)) * (1 - 3 * margin_detail))
+                V.append(margin_detail + (k / (num_samples_detail-1)) * (1 - 3 * margin_detail))
+                W.append(1 - U[-1] - V[-1])
+        U = np.array(U); V = np.array(V); W = np.array(W)
+                
+        for f in tqdm(np.unique(self.F_singular + self.F_over_pi),
+                        desc='Sampling dense points and vectors', 
+                        total=len(self.F), 
+                        leave=False):
+        
+            # Interpolate to get the 3D point in the face
+            points += (
+                U[:, None] * self.V[self.F[f, 0]][None, :] + \
+                    V[:, None] * self.V[self.F[f, 1]][None, :] + \
+                        W[:, None] * self.V[self.F[f, 2]][None, :]
+            ).tolist()
+            F_involved += [f] * len(U)
+            
+            Z = complex_projection(
+                self.B1[[f] * len(U)], self.B2[[f] * len(U)], self.normals[[f] * len(U)],
+                points[-len(U):] - self.V_extended[self.F_f[f, 0]], 
+                diagonal=True
+            )
+        
+            if f in self.F_singular:
+                prod = 1
+                for j, index in enumerate(self.indices_f[f]):
+                    coeff_singular = coeffs_singular[f][j]
+                    if index == 1:
+                        prod *= coeff_singular[0] * Z + coeff_singular[1]
+                    elif index == -1:
+                        prod *= coeff_singular[0] * np.conjugate(Z) + coeff_singular[1]
+                    else:
+                        raise ValueError('Singularities with index > 1 or < -1 should have been decomposed.')
+                    
+                vectors_complex += prod.tolist()
+            
+            elif f in self.F_over_pi:
+                f_sub_involved = []
+                for i in range(len(U)):
+                    f_sub_involved.append(
+                        is_in_face(self.V_subdivided[f], self.F_subdivided[f], np.array(points[-len(U):])[i])
+                    )
+                    
+                vectors_complex += (
+                    coeffs_subdivided[f][f_sub_involved, 0] * Z + coeffs_subdivided[f][f_sub_involved, 1]
+                ).tolist()
+                
+            else:
+                raise ValueError(f'The {f}-th face is not singular or over pi. (araised in sampling)')
+        
+        for j in tqdm(range(num_samples), desc='Sampling rest points and vectors', 
+                      total=num_samples, leave=False):
+            for k in range(num_samples - j):
+                # Barycentric coordinates
+                u = margin + (j / (num_samples-1)) * (1 - 3 * margin)
+                v = margin + (k / (num_samples-1)) * (1 - 3 * margin)
+                w = 1 - u - v
+                
+                # Interpolate to get the 3D point in the face
+                points += (
+                    u * self.V[self.F[F_trivial, 0]] + \
+                        v * self.V[self.F[F_trivial, 1]] + \
+                            w * self.V[self.F[F_trivial, 2]]
+                ).tolist()
+                F_involved += F_trivial.tolist()
+                vectors_complex += field(points[-len(F_trivial):], F_trivial).tolist()
+
+        return np.array(points), np.array(vectors_complex), np.array(F_involved)
+    
+    def corner_field(self, singularities, indices, v_init, z_init):
         Theta = self.compute_thetas(singularities=singularities, indices=indices)
         
         U = self.reconstruct_corners_from_thetas(Theta, v_init, z_init)
         
         self.subdivide_faces_over_pi(Theta, U)
         
-        coeffs, coeffs_singular, coeffs_subdivided = self.reconstruct_linear_from_corners(U)
+        return U
+    
+    def vector_field(self, U, Beta=None):
+        coeffs, coeffs_singular, coeffs_subdivided = self.reconstruct_linear_from_corners(U, Beta=Beta)
             
         field = self.define_linear_field(coeffs, coeffs_singular, coeffs_subdivided)
         
@@ -904,7 +1041,10 @@ class Triangle_mesh():
         
         return field_truth, field
 
-    def sample_points_and_vectors(self, field, num_samples=3, margin = 0.15, singular_detail=False, num_samples_detail=10, margin_detail=0.05):
+    def sample_points_and_vectors(
+        self, field, 
+        num_samples=3, margin = 0.15, singular_detail=False, 
+        num_samples_detail=10, margin_detail=0.05, return_complex=False):
         points = []
         margins = [margin] * len(self.F)
         nums_samples = [num_samples] * len(self.F)
@@ -932,9 +1072,12 @@ class Triangle_mesh():
                     
         points = np.array(points)
 
-        posis, vectors = field(points)
-        
-        return posis, vectors
+        if return_complex:
+            posis, vectors_complex, F_involved = field(points, return_complex=True)
+            return posis, vectors_complex, F_involved
+        else:
+            posis, vectors = field(points, return_complex)
+            return posis, vectors
     
 
 

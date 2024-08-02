@@ -5,7 +5,7 @@ from matplotlib.widgets import Slider
 # Define the complex vector field function
 def f(z, r, t):
     b = r * np.exp(1j * t)
-    return z + b * np.conj(z)
+    return z * b * np.conj(z - 1 - 1j)
 
 # Generate the grid of points
 num_coor = 30  # Number of axes directions

@@ -9,7 +9,6 @@ from scipy.sparse.linalg import lsqr
 import cvxopt
 
 
-
 class Triangle_mesh():
     '''
     A class for processing triangle meshes by vertex and edge extending approach.
