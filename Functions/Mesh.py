@@ -317,6 +317,8 @@ class Triangle_mesh():
         self.indices_f = {}
         self.V_singular = []
         
+        self.Beta = np.zeros(len(self.F_f))
+        
         mask_removed_f = np.ones(len(self.F_f) + len(self.F_e) + len(self.F_v), dtype=bool)
         mask_removed_e = np.ones(len(self.E_extended), dtype=bool)
         
@@ -399,6 +401,7 @@ class Triangle_mesh():
                 
                 # Loop over the faces incident to the vertex
                 for f in np.where(np.any(np.isin(self.F, in_F_v), axis=1))[0]:
+                    self.Beta[f] += index
                     deal_singularity(f, singularity, index)
                 
                 for e_comb in self.F_v_map_E_comb[in_F_v[0]]:
@@ -426,6 +429,7 @@ class Triangle_mesh():
                         np.sum(np.isin(self.F_f, e), axis=1) == 2
                     )[0][0]
                     
+                    self.Beta[f] += index
                     deal_singularity(f, singularity, index)
                     
                     comb = [[0, 3], [1, 2]][i]
@@ -440,6 +444,7 @@ class Triangle_mesh():
             elif in_F_f is not False:
                 # Obtain the neighbour faces of the face containing the singularity
                 # and the unfolded locations of the singularity on those faces
+                self.Beta[in_F_f] += index
                 for _ in range(abs(index)):
                     deal_singularity(in_F_f, singularity, np.sign(index), in_face=True)
                 
@@ -454,6 +459,7 @@ class Triangle_mesh():
                         v_far, self.V[common_edge[0]], self.V[common_edge[1]], singularity
                     )
                     
+                    self.Beta[f_neighbour] += index
                     deal_singularity(f_neighbour, singularity_unfolded, index)
                 
                 # The face/edges of incident edge faces are zero and removed
@@ -480,7 +486,7 @@ class Triangle_mesh():
         # Quantities for quadratic programming dependent on the singularities
         E = self.d1[mask_removed_f][:, mask_removed_e]
         d = (2 * np.pi * self.I_F - self.G_F - self.d1 @ Theta)[mask_removed_f]
-            
+        
         # Define the system to solve the quadratic programming problem
         KKT_lhs = bmat([
             [Q, E.T],
@@ -499,6 +505,43 @@ class Triangle_mesh():
         print(f'Total combinatorial rotations: {np.sum(np.abs(Theta[len(self.E_twin):]))}.')
         
         return Theta
+    
+    def compute_betas(self):
+        Q_right = lil_matrix((len(self.E), len(self.F)))
+        c = np.zeros(len(self.F))
+        
+        for i, e in enumerate(self.E):
+            f = np.where(np.sum(np.isin(self.F, e), axis=1) == 2)[0]
+            
+            if len(f) == 2:
+                Q_right[i, f[0]] = 1
+                Q_right[i, f[1]] = -1
+            else:
+                raise ValueError(f'The edge {e} is not shared by two faces.')
+        
+        Q = Q_right.T @ Q_right
+        Q = Q.tocoo()
+        
+        E = lil_matrix((len(self.F), len(self.F)))
+        d = self.Beta.copy()
+        for f in self.F_singular:
+            E[f, f] = 1
+        
+        # Define the system to solve the quadratic programming problem
+        KKT_lhs = bmat([
+            [Q, E.T],
+            [E, np.zeros((E.shape[0], E.shape[0]))]
+        ], format='coo')
+        KKT_rhs = np.concatenate([-c, d])
+        
+        # Solve the quadratic programming problem
+        solution, _, itn, r1norm = lsqr(KKT_lhs, KKT_rhs)[:4]
+        
+        self.Beta = solution[:len(self.F)]
+        
+        print(f'Beta computation iteration and residual: {itn}, {r1norm}.')
+        
+        print(f'Total beta: {np.sum(np.abs(self.Beta))}.')
     
     def reconstruct_corners_from_thetas(self, Theta, v_init, z_init, Theta_include_pairface=False):
         '''
@@ -627,7 +670,7 @@ class Triangle_mesh():
                 coeffs: (num_F, 2) complex array of coefficients for the linear fields
         '''
         if Beta is None:
-            Beta = np.ones(len(self.F_f))
+            Beta = self.Beta
             
         coeffs = np.zeros((len(self.F_f), 2), dtype=complex)
         coeffs_singular = {}
@@ -969,6 +1012,8 @@ class Triangle_mesh():
     
     def corner_field(self, singularities, indices, v_init, z_init):
         Theta = self.compute_thetas(singularities=singularities, indices=indices)
+        
+        self.compute_betas()
         
         U = self.reconstruct_corners_from_thetas(Theta, v_init, z_init)
         

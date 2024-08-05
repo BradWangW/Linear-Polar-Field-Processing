@@ -52,8 +52,21 @@ z2_len = 1
 z2_angle = np.pi / 4
 theta_01 = np.pi / 4
 theta_02 = -np.pi / 4
-theta_0 = 0.0001
+theta_0 = 0
 
+def params(z1, z2_len, theta_01, theta_02, theta_0):
+
+    theta_12 = theta_02 - theta_01
+    z3_len = np.sqrt(z1**2 + z2_len**2 - 2 * z1 * z2_len * np.cos(z2_angle))
+    
+
+# Create the plot
+fig, ax = plt.subplots(3)
+
+# Rotate and translate the triangle so each corner is at the origin
+for i in range(3):
+    
+    
 a_re, a_im, b_re, b_im = get_params(z1, z2_len, z2_angle, theta_01, theta_02, theta_0)
 
 # Calculate the initial vector field
@@ -63,8 +76,6 @@ X_cor, Y_cor, U_cor, V_cor = corner_XYUV(z1, z2_len, z2_angle, theta_01, theta_0
 X_lines = np.array([-range_coor, range_coor])
 Y_lines = corner_perpendicular_lines(X_lines, X_cor, Y_cor, U_cor, V_cor)
 
-# Create the plot
-fig, ax = plt.subplots()
 q = ax.quiver(X, Y, U, V)
 q_cor = ax.quiver(X_cor, Y_cor, U_cor, V_cor, color='r')
 line0 = ax.plot(X_lines, Y_lines[0], color='r')
