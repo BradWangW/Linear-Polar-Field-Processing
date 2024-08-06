@@ -34,6 +34,12 @@ if __name__ == '__main__':
         0.2 * V[F[5, 0]] + 0.2 * V[F[5, 1]] + 0.6 * V[F[5, 2]]
     ])
     indices = [-1, 1, -1, 1, 1, 1, -1, -1, -1, 1, 1, 1]
+    # singularities = np.array([
+    #     0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
+    #     V[F[205, 0]]
+    # ])
+    # indices = [1, 1]
+    
     v_init = 10
     z_init = 1
     
@@ -99,6 +105,10 @@ if __name__ == '__main__':
         
         if(psim.Button("Optimise Beta")):
             Beta = optimal_Beta
+            changed_beta = True
+            
+        if(psim.Button("Binarise optimal Beta")):
+            Beta = np.where(optimal_Beta > 0, 1, -1)
             changed_beta = True
         
         if changed_idx or changed_beta:
