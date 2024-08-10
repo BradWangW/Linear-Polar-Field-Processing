@@ -12,7 +12,7 @@ np.set_printoptions(threshold=np.inf)
 
 if __name__ == '__main__':
     
-    V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
+    V, F = load_off_file(os.path.join('..', 'data', 'rocker-arm2500.off'))
     E = obtain_E(F)
 
     mesh = Triangle_mesh(V, F)
@@ -29,11 +29,9 @@ if __name__ == '__main__':
         (V[E[100, 0]] + V[E[100, 1]])/2,
         0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
         V[F[300, 0]],
-        0.2 * V[F[305, 0]] + 0.2 * V[F[305, 1]] + 0.6 * V[F[305, 2]],
-        0.2 * V[F[305, 0]] + 0.2 * V[F[305, 1]] + 0.6 * V[F[305, 2]],
         0.2 * V[F[5, 0]] + 0.2 * V[F[5, 1]] + 0.6 * V[F[5, 2]]
     ])
-    indices = [-1, 1, -1, 1, 1, 1, -1, -1, -1, 1, 1, 1]
+    indices = [-2, 2, -1, 1, 1, 1, -1, -1, -1, 1]
     # singularities = np.array([
     #     0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
     #     V[F[205, 0]]
@@ -41,32 +39,29 @@ if __name__ == '__main__':
     # indices = [1, 1]
     
     v_init = 10
-    z_init = 1
+    z_init = 10
     
     U = mesh.corner_field(singularities, indices, v_init, z_init)
-    
-    optimal_Beta = mesh.Beta.copy()
+
     
     coeffs, coeffs_singular, coeffs_subdivided = mesh.reconstruct_linear_from_corners(U)
     
     posis, vectors_complex, F_involved = mesh.sample_field(
-        coeffs, coeffs_singular, coeffs_subdivided, num_samples=5, margin=0.1, 
-        singular_detail=True, num_samples_detail=12, margin_detail=0.05
+        coeffs, coeffs_singular, coeffs_subdivided, num_samples=2, margin=0.25, 
+        singular_detail=True, num_samples_detail=10, margin_detail=0.05
     )
     
     B1, B2 = mesh.B1[F_involved], mesh.B2[F_involved]
     
     vectors = vectors_complex.real[:, None] * B1 + vectors_complex.imag[:, None] * B2
     
-    vectors /= np.linalg.norm(vectors, axis=1)[:, None]
+    # vectors /= np.linalg.norm(vectors, axis=1)[:, None]
 
     ps.init()
-    ps_mesh = ps.register_surface_mesh("Input Mesh", V, F)
-    
-    ps_mesh.add_scalar_quantity("Beta", mesh.Beta, defined_on='faces', cmap='viridis')
+    ps_mesh = ps.register_surface_mesh("Input Mesh", V, F, color=(0.95, 0.98, 1))
 
     ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True, radius=0)
-    ps_field.add_vector_quantity('Field', vectors, enabled=True, length=0.006)
+    ps_field.add_vector_quantity('Field', vectors, enabled=True, color=(0.03, 0.33, 0.77))
             
     for f in mesh.F_over_pi:
         ps.register_surface_mesh(f"F_over_pi{f}", mesh.V_subdivided[f], mesh.F_subdivided[f], enabled=True)
@@ -75,12 +70,12 @@ if __name__ == '__main__':
     ps.register_point_cloud("singularity marker", singularities, enabled=True, radius=0.002)
     
     vectors_complex_unrot = vectors_complex.copy()
-    beta = 1
     rot = 0
+    unit_length = False
     
     def callback():
         
-        global beta, rot, indices, U, B1, B2, vectors_complex, vectors, posis, F_involved, vectors_complex_unrot
+        global rot, indices, U, B1, B2, vectors_complex, vectors, posis, F_involved, vectors_complex_unrot, unit_length
         
         psim.PushItemWidth(150)
 
@@ -100,28 +95,16 @@ if __name__ == '__main__':
         
         changed_rot, rot = psim.SliderFloat("Rotation", rot, v_min=-np.pi, v_max=np.pi)
         
-        changed_beta, beta = psim.InputFloat("beta", beta, step=0.25, step_fast=1)
-        Beta = np.full(F.shape[0], beta)
-        
-        if(psim.Button("Optimise Beta")):
-            Beta = optimal_Beta
-            changed_beta = True
-            
-        if(psim.Button("Binarise optimal Beta")):
-            Beta = np.where(optimal_Beta > 0, 1, -1)
-            changed_beta = True
-        
-        if changed_idx or changed_beta:
-            if changed_idx:
-                U = mesh.corner_field(singularities, indices_new, v_init, z_init)
+        if changed_idx:
+            U = mesh.corner_field(singularities, indices_new, v_init, z_init)
                 
             coeffs, coeffs_singular, coeffs_subdivided = mesh.reconstruct_linear_from_corners(
-                U, Beta = Beta
+                U
             )
                 
             posis, vectors_complex, F_involved = mesh.sample_field(
-                coeffs, coeffs_singular, coeffs_subdivided, num_samples=5, margin=0.1, 
-                singular_detail=True, num_samples_detail=12, margin_detail=0.05
+                coeffs, coeffs_singular, coeffs_subdivided, num_samples=2, margin=0.25, 
+                singular_detail=True, num_samples_detail=10, margin_detail=0.05
             )
 
             B1, B2 = mesh.B1[F_involved], mesh.B2[F_involved]
@@ -133,12 +116,19 @@ if __name__ == '__main__':
                 
         vectors = vectors_complex.real[:, None] * B1 + vectors_complex.imag[:, None] * B2
             
-        vectors /= np.linalg.norm(vectors, axis=1)[:, None]
+        # vectors /= np.linalg.norm(vectors, axis=1)[:, None]
         
         ps_mesh.remove_all_quantities()
-        ps_mesh.add_scalar_quantity("Beta", mesh.Beta, defined_on='faces', cmap='viridis')
-        ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True, radius=0)
-        ps_field.add_vector_quantity('Field', vectors, enabled=True, length=0.006)
+        ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True)
+        
+        if(psim.Button("Unit length")):
+            unit_length = True
+        if(psim.Button("No unit length")):
+            unit_length = False
+        if unit_length:
+            ps_field.add_vector_quantity('Field', vectors/np.linalg.norm(vectors, axis=1)[:, None], enabled=True, length=0.006)
+        else:
+            ps_field.add_vector_quantity('Field', vectors, enabled=True, length=0.06)
 
         psim.PopItemWidth()
 
