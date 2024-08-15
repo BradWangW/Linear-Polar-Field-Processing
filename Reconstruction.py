@@ -19,35 +19,35 @@ if __name__ == '__main__':
     
     mesh.initialise_field_processing()
     
-    singularities = np.array([
-        0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
-        0.6 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.2 * V[F[70, 2]],
-        V[F[205, 0]],
-        0.2 * V[F[205, 0]] + 0.2 * V[F[205, 1]] + 0.6 * V[F[205, 2]],
-        0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
-        0.6 * V[F[103, 0]] + 0.2 * V[F[103, 1]] + 0.2 * V[F[103, 2]],
-        (V[E[100, 0]] + V[E[100, 1]])/2,
-        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-        V[F[300, 0]],
-        0.2 * V[F[5, 0]] + 0.2 * V[F[5, 1]] + 0.6 * V[F[5, 2]]
-    ])
-    indices = [-2, 2, -1, 1, 1, 1, -1, -1, -1, 1]
     # singularities = np.array([
     #     0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
-    #     V[F[205, 0]]
+    #     0.6 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.2 * V[F[70, 2]],
+    #     V[F[205, 0]],
+    #     0.2 * V[F[205, 0]] + 0.2 * V[F[205, 1]] + 0.6 * V[F[205, 2]],
+    #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
+    #     0.6 * V[F[103, 0]] + 0.2 * V[F[103, 1]] + 0.2 * V[F[103, 2]],
+    #     (V[E[100, 0]] + V[E[100, 1]])/2,
+    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+    #     V[F[300, 0]],
+    #     0.2 * V[F[5, 0]] + 0.2 * V[F[5, 1]] + 0.6 * V[F[5, 2]]
     # ])
-    # indices = [1, 1]
+    # indices = [-2, 2, -1, 1, -1, 1, -1, 1, -1, 1]
+    # singularities = np.array([
+    #     V[70],
+    #     0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]]])
+    # indices = [1, -1]
+    singularities = np.array([])
+    indices = []
     
-    v_init = 10
-    z_init = 10
+    v_init = 100
+    z_init = 1
     
     U = mesh.corner_field(singularities, indices, v_init, z_init)
-
     
     coeffs, coeffs_singular, coeffs_subdivided = mesh.reconstruct_linear_from_corners(U)
     
     posis, vectors_complex, F_involved = mesh.sample_field(
-        coeffs, coeffs_singular, coeffs_subdivided, num_samples=2, margin=0.25, 
+        coeffs, coeffs_singular, coeffs_subdivided, num_samples=5, margin=0.1, 
         singular_detail=True, num_samples_detail=10, margin_detail=0.05
     )
     
@@ -66,8 +66,8 @@ if __name__ == '__main__':
     for f in mesh.F_over_pi:
         ps.register_surface_mesh(f"F_over_pi{f}", mesh.V_subdivided[f], mesh.F_subdivided[f], enabled=True)
     
-    
-    ps.register_point_cloud("singularity marker", singularities, enabled=True, radius=0.002)
+    if len(singularities) > 0:
+        ps.register_point_cloud("singularity marker", singularities, enabled=True, radius=0.0015)
     
     vectors_complex_unrot = vectors_complex.copy()
     rot = 0
@@ -103,7 +103,7 @@ if __name__ == '__main__':
             )
                 
             posis, vectors_complex, F_involved = mesh.sample_field(
-                coeffs, coeffs_singular, coeffs_subdivided, num_samples=2, margin=0.25, 
+                coeffs, coeffs_singular, coeffs_subdivided, num_samples=5, margin=0.1, 
                 singular_detail=True, num_samples_detail=10, margin_detail=0.05
             )
 
@@ -126,7 +126,7 @@ if __name__ == '__main__':
         if(psim.Button("No unit length")):
             unit_length = False
         if unit_length:
-            ps_field.add_vector_quantity('Field', vectors/np.linalg.norm(vectors, axis=1)[:, None], enabled=True, length=0.006)
+            ps_field.add_vector_quantity('Field', vectors/np.linalg.norm(vectors, axis=1)[:, None], enabled=True, length=0.005)
         else:
             ps_field.add_vector_quantity('Field', vectors, enabled=True, length=0.06)
 

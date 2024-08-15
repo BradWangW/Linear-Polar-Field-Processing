@@ -1,10 +1,10 @@
 import numpy as np
 from tqdm import tqdm
-from scipy.sparse import lil_matrix, eye, bmat
+from scipy.sparse import lil_matrix, eye, bmat, diags
 from Functions.Auxiliary import (accumarray, find_indices, is_in_face, compute_planes, 
                                  complex_projection, obtain_E, compute_V_boundary, 
                                  compute_unfolded_vertex, compute_barycentric_coordinates, 
-                                 compute_angle_defect)
+                                 compute_angle_defect, compute_cot_weights)
 from scipy.sparse.linalg import lsqr
 import cvxopt
 
@@ -21,6 +21,8 @@ class Triangle_mesh():
         self.V_boundary = compute_V_boundary(F)
         
         self.G_V = compute_angle_defect(V, F, self.V_boundary)
+        
+        self.cot_weights = compute_cot_weights(V, self.E, F)
         
         self.B1, self.B2, self.normals = compute_planes(V, F)
         
@@ -300,7 +302,7 @@ class Triangle_mesh():
             
         self.pair_rotations = pair_rotations
             
-    def compute_thetas(self, singularities=None, indices=None):
+    def compute_thetas(self, singularities=None, indices=None, weight_comb=10):
         '''
             Compute the set of thetas for each face singularity 
             by constrained optimisation using the KKT conditions.
@@ -452,48 +454,58 @@ class Triangle_mesh():
                 for _ in range(abs(index)):
                     deal_singularity(in_F_f, singularity, np.sign(index), in_face=True)
                 
-                for i in range(3):
-                    common_edge = np.stack([self.F[in_F_f], np.roll(self.F[in_F_f], -1)], axis=1)[i]
-                    f_neighbour = np.where(np.sum(np.isin(self.F, common_edge), axis=1) == 2)[0]
-                    f_neighbour = f_neighbour[f_neighbour != in_F_f][0]
+                # for i in range(3):
+                #     common_edge = np.stack([self.F[in_F_f], np.roll(self.F[in_F_f], -1)], axis=1)[i]
+                #     f_neighbour = np.where(np.sum(np.isin(self.F, common_edge), axis=1) == 2)[0]
+                #     f_neighbour = f_neighbour[f_neighbour != in_F_f][0]
                     
-                    v_far = self.V[np.setdiff1d(self.F[f_neighbour], common_edge)].squeeze()
+                #     v_far = self.V[np.setdiff1d(self.F[f_neighbour], common_edge)].squeeze()
                     
-                    singularity_unfolded = compute_unfolded_vertex(
-                        v_far, self.V[common_edge[0]], self.V[common_edge[1]], singularity
-                    )
+                #     singularity_unfolded = compute_unfolded_vertex(
+                #         v_far, self.V[common_edge[0]], self.V[common_edge[1]], singularity
+                #     )
                     
-                    self.Beta[f_neighbour] += index
-                    deal_singularity(f_neighbour, singularity_unfolded, index)
+                #     self.Beta[f_neighbour] += index
+                #     deal_singularity(f_neighbour, singularity_unfolded, index)
                 
-                # The face/edges of incident edge faces are zero and removed
-                for F_e in np.where(np.sum(np.isin(self.F_e, self.F_f[in_F_f]), axis=1) == 2)[0]:
-                    mask_removed_f[len(self.F_f) + F_e] = False
+                # # The face/edges of incident edge faces are zero and removed
+                # for F_e in np.where(np.sum(np.isin(self.F_e, self.F_f[in_F_f]), axis=1) == 2)[0]:
+                #     mask_removed_f[len(self.F_f) + F_e] = False
                     
-                    e_comb1 = np.where(np.all(np.isin(self.E_comb, self.F_e[F_e, [0, 3]]), axis=1))[0]
-                    e_comb2 = np.where(np.all(np.isin(self.E_comb, self.F_e[F_e, [1, 2]]), axis=1))[0]
+                #     e_comb1 = np.where(np.all(np.isin(self.E_comb, self.F_e[F_e, [0, 3]]), axis=1))[0]
+                #     e_comb2 = np.where(np.all(np.isin(self.E_comb, self.F_e[F_e, [1, 2]]), axis=1))[0]
                     
-                    mask_removed_e[e_comb1 + len(self.E_twin)] = False
-                    mask_removed_e[e_comb2 + len(self.E_twin)] = False
+                #     mask_removed_e[e_comb1 + len(self.E_twin)] = False
+                #     mask_removed_e[e_comb2 + len(self.E_twin)] = False
                     
             else:
                 raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')
-        print('Finished processing singularities and computing thetas.')   
-        # Independent quantities for quadratic programming
-        Q = eye(np.sum(mask_removed_e), format='lil')
-        c = np.zeros(np.sum(mask_removed_e))
+        print('Finished processing singularities and computing thetas.')  
         
-        # Penalty for the combinatorial edges to reduce jumps
-        Q[len(self.E_twin):, len(self.E_twin):] *= 10
+        # lens_E = np.linalg.norm(
+        #     self.V_extended[self.E_extended[:, 0]] - self.V_extended[self.E_extended[:, 1]], 
+        #     axis=1
+        # )[mask_removed_e]
+        
+        # lens_E[lens_E <= 0] = np.mean(lens_E[lens_E > 0]) ** 2
+        
+        # weights_E = 1/lens_E
+        
+        # Q is the weight matrix, whose diagonal is the weights of the edges
+        # Q = diags([weights_E], [0])
+        Q = eye(np.sum(mask_removed_e))
         Q = Q.tocoo()
-        print('Finished constructing the Q matrix.')
+        c = np.zeros(np.sum(mask_removed_e))
+
         # Quantities for quadratic programming dependent on the singularities
-        E = self.d1[mask_removed_f][:, mask_removed_e]
-        print('Finished constructing the E matrix.')
-        d = (2 * np.pi * self.I_F - self.G_F - self.d1 @ Theta)[mask_removed_f]
-        print('Finished constructing the d vector.')
+        # E = self.d1[mask_removed_f][:, mask_removed_e].tocsc()
+        E = self.d1.tocsc()
+
+        d = (self.G_F - 2 * np.pi * self.I_F - self.d1 @ Theta)[mask_removed_f]
+        print(np.all(np.isclose(d, self.G_F)))
+        print(np.sum(np.abs(Theta)), np.sum(np.abs(self.I_F)), np.sum(np.abs(self.G_F)), np.sum(np.abs(self.d1 @ Theta)))
+
         # Define the system to solve the quadratic programming problem
-        print('Constructing the KKT system...')
         KKT_lhs = bmat([
             [Q, E.T],
             [E, np.zeros((E.shape[0], E.shape[0]))]
@@ -512,41 +524,6 @@ class Triangle_mesh():
         
         return Theta
     
-    def compute_betas(self):
-        Q_right = lil_matrix((len(self.E), len(self.F)))
-        c = np.zeros(len(self.F))
-        
-        for i, e in enumerate(self.E):
-            f = np.where(np.sum(np.isin(self.F, e), axis=1) == 2)[0]
-            
-            if len(f) == 2:
-                Q_right[i, f[0]] = 1
-                Q_right[i, f[1]] = -1
-            else:
-                raise ValueError(f'The edge {e} is not shared by two faces.')
-        
-        Q = Q_right.T @ Q_right
-        Q = Q.tocoo()
-        
-        E = lil_matrix((len(self.F), len(self.F)))
-        d = self.Beta.copy()
-        for f in self.F_singular:
-            E[f, f] = 1
-        
-        # Define the system to solve the quadratic programming problem
-        KKT_lhs = bmat([
-            [Q, E.T],
-            [E, np.zeros((E.shape[0], E.shape[0]))]
-        ], format='coo')
-        KKT_rhs = np.concatenate([-c, d])
-        
-        # Solve the quadratic programming problem
-        solution, _, itn, r1norm = lsqr(KKT_lhs, KKT_rhs)[:4]
-        
-        self.Beta = solution[:len(self.F)]
-        
-        print(f'Beta computation iteration and residual: {itn}, {r1norm}.')
-    
     def reconstruct_corners_from_thetas(self, Theta, v_init, z_init, Theta_include_pairface=False):
         '''
             Reconstruct the corner values from the thetas.
@@ -557,10 +534,11 @@ class Triangle_mesh():
             Output:
                 Us: (num_V_extended, num_singularities) complex array of corner values
         '''
+        print('num of >pi rotations: ', np.sum(np.abs(Theta) > np.pi))
         Theta_with_pairface = Theta.copy()
         if not Theta_include_pairface:
             Theta_with_pairface[len(self.E_twin):] += self.pair_rotations
-            
+        
         U = np.zeros(len(self.V_extended), dtype=complex)
         mask_removed_v = np.ones(len(self.V_extended), dtype=bool)
         mask_removed_v[self.V_singular] = False
@@ -571,12 +549,10 @@ class Triangle_mesh():
         lhs[-1, v_init] = 1
         
         rhs = np.zeros(len(self.E_extended) + 1, dtype=complex)
-        # rhs[-1] = z_init / np.abs(z_init)
+        
         rhs[-1] = z_init
         
         soln, _, itn, r1norm = lsqr(lhs[:, mask_removed_v], rhs)[:4]
-        
-        # soln /= np.abs(soln)
         
         U[mask_removed_v] = soln
             
@@ -661,7 +637,7 @@ class Triangle_mesh():
             self.V_subdivided[f] = np.array(self.V_subdivided[f])
             self.U_subdivided[f] = np.array(self.U_subdivided[f])
     
-    def reconstruct_linear_from_corners(self, U, Beta=None):
+    def reconstruct_linear_from_corners(self, U):
         '''
             Reconstruct the coefficients of the linear field from the corner values.
             Input:
@@ -670,8 +646,6 @@ class Triangle_mesh():
             Output:
                 coeffs: (num_F, 2) complex array of coefficients for the linear fields
         '''
-        if Beta is None:
-            Beta = self.Beta
             
         coeffs = np.zeros((len(self.F_f), 3), dtype=complex)
         coeffs_singular = {}
@@ -758,7 +732,6 @@ class Triangle_mesh():
                 v0 = self.V_extended[f[0]]
                 coeffs_f = np.zeros((len(self.F_subdivided[i]), 3), dtype=complex)
                 sub_itn = 0
-                beta = Beta[i]  
                 
                 # For each subdivided face, the last row aligns the first corner
                 for j, f_sub in enumerate(self.F_subdivided[i]):
@@ -767,7 +740,6 @@ class Triangle_mesh():
                     )[0]
                     
                     Uf_sub = self.U_subdivided[i][f_sub]
-                    prod_sub = (beta * Uf_sub.real + 1j * Uf_sub.imag) * np.conjugate(Zf_sub)
                     
                     lhs = np.array([
                         [Zf_sub[0].real, -Zf_sub[0].imag, Zf_sub[0].real, Zf_sub[0].imag, 1, 0],
@@ -795,7 +767,6 @@ class Triangle_mesh():
             # If the face is not singular, the last row aligns the first corner 
             # value up to +-sign and scale, as for the other two corners
             else:
-                beta = Beta[i]  
                 
                 lhs = np.array([
                     [Zf[0].real, -Zf[0].imag, Zf[0].real, Zf[0].imag, 1, 0],
@@ -819,99 +790,7 @@ class Triangle_mesh():
         print(f'Linear field reconstruction mean iterations and total residuals',
               round(mean_itn, 3), total_err)
         
-        self.Beta = Beta
-        
         return coeffs, coeffs_singular, coeffs_subdivided
-    
-    def define_linear_field(self, coeffs, coeffs_singular, coeffs_subdivided):
-        '''
-            Define the linear field from the coefficients (used for single sampling).
-            Input:
-                coeffs: (num_F, num_singularities, 2) complex array of coefficients for the linear fields
-                indices_f: (num_singularities, ) array of indices for the singularities
-            Output:
-                linear_field: function of the linear field
-        '''
-
-        def linear_field(posis, return_complex=False):
-
-            # Find the faces where the points are located
-            # For points on vertices or edges, all adjacent faces are considered
-            # For points in faces with more than one singularities,
-            # multiplicative fields are computed
-            posis_extended = []
-            F_involved = []
-            idx_singular = []
-            idx_subdivided = []
-            
-            for posi in tqdm(posis, 
-                             desc='Computing the linear field at the points', 
-                             total=len(posis), 
-                             leave=False):
-                f_involved = is_in_face(self.V_extended, self.F_f, posi, include_EV=True)
-                
-                for i, f in enumerate(f_involved):
-                    if f in self.F_singular:
-                        idx_singular.append(len(posis_extended) + i)
-                    elif f in self.F_over_pi:
-                        idx_subdivided.append(len(posis_extended) + i)
-                
-                posis_extended += [posi] * len(f_involved)
-                F_involved += f_involved
-
-            posis_extended = np.array(posis_extended)
-            F_involved = np.array(F_involved).flatten()
-            mask = np.zeros(len(posis_extended), dtype=bool)
-            mask[idx_singular] = True
-            mask[idx_subdivided] = True
-            
-            # Compute the linear field
-            B1 = self.B1[F_involved]; B2 = self.B2[F_involved]; normals = self.normals[F_involved]
-            
-            Z = complex_projection(
-                B1, B2, normals, 
-                posis_extended - self.V_extended[self.F_f[F_involved, 0]], 
-                diagonal=True
-            )
-            
-            vectors_complex = np.zeros(len(posis_extended), dtype=complex)
-            a = (1 + self.Beta[F_involved[~mask]]) / 2
-            b = (1 - self.Beta[F_involved[~mask]]) / 2
-            vectors_complex[~mask] = a * coeffs[F_involved[~mask], 0] * Z[~mask] + \
-                b * np.conjugate(coeffs[F_involved[~mask], 0] * Z[~mask]) + \
-                coeffs[F_involved[~mask], 1]
-            
-            for i in idx_singular:
-                f = F_involved[i]
-                prod = 1
-                for j, index in enumerate(self.indices_f[f]):
-                    coeff_singular = coeffs_singular[f][j]
-                    if index == 1:
-                        prod *= coeff_singular[0] * Z[i] + coeff_singular[1]
-                    elif index == -1:
-                        prod *= coeff_singular[0] * np.conjugate(Z[i]) + coeff_singular[1]
-                    else:
-                        raise ValueError('The field cannot handle face singularities with index > 1 or < 1 yet.')
-                    
-                vectors_complex[i] = prod
-            
-            for i in idx_subdivided:
-                f = F_involved[i]
-                
-                f_sub_involved = is_in_face(self.V_subdivided[f], self.F_subdivided[f], posis_extended[i], include_EV=True)
-                
-                vectors_complex[i] = coeffs_subdivided[f][f_sub_involved, 0] * Z[i] + coeffs_subdivided[f][f_sub_involved, 1]
-            
-            vectors_complex = vectors_complex
-
-            vectors = B1 * vectors_complex.real[:, None] + B2 * vectors_complex.imag[:, None]
-
-            if return_complex:
-                return posis_extended, vectors_complex, F_involved
-            else:
-                return posis_extended, vectors
-        
-        return linear_field
     
     def sample_field(self, coeffs, coeffs_singular, coeffs_subdivided,
         num_samples=3, margin = 0.15, singular_detail=False, 
@@ -1026,103 +905,3 @@ class Triangle_mesh():
         
         return field
     
-    def vector_field_from_truth(self, coeffs_truth, singularities, indices):
-        '''
-            Field - dictate a,b,c,d - thetas - reconstruct U - reconstruct coefficients
-            Input: 
-                coeffs: (num_F, num_singularities_f, 2) complex array of coefficients for the linear fields
-            Output:
-                field: function of the reconstructed vector field
-                field_truth: function of the truth vector field
-        '''
-        self.initialise_field_processing()
-
-        F_singular = []
-        singularities_f = []
-        indices_f = []
-
-        if singularities is not None:
-            for singularity, index in zip(singularities, indices):
-                # If the singularity is in a face, it contributes a set of thetas
-                F_candidate = is_in_face(self.V_extended, self.F_f, singularity)
-                
-                if F_candidate is not False:
-                    F_singular.append(F_candidate)
-                    singularities_f.append(singularity)
-                    indices_f.append(index)
-
-        F_singular = np.array(F_singular)
-        singularities_f = np.array(singularities_f)
-        indices_f = np.array(indices_f)
-
-        U_truth = np.zeros(len(self.V_extended), dtype=complex)
-        
-        for i, f in enumerate(self.F_f):
-            b1 = self.B1[i][None, :]; b2 = self.B2[i][None, :]; normal = self.normals[i][None, :]
-
-            V_f = self.V_extended[f]
-
-            Z_f = complex_projection(b1, b2, normal, V_f - V_f[0])[0]
-
-            # coeffs_truth[i, :, 0]: (num_singularities_f, )
-            # Z_f: (3, )
-            for j in range(3):
-                U_truth[f[j]] = coeffs_truth[i, 0] * Z_f[j] + coeffs_truth[i, 1]
-        U_truth = U_truth / np.abs(U_truth)
-
-        Theta = np.angle(U_truth[self.E_extended[:, 1]]) - np.angle(U_truth[self.E_extended[:, 0]])
-        # Theta = np.mod(Theta + np.pi, 2 * np.pi) - np.pi
-
-        U = self.reconstruct_corners_from_thetas(Theta, v_init=0, z_init=U_truth[0], Theta_include_pairface=True)
-
-        coeffs = self.reconstruct_linear_from_corners(U, singularities_f) 
-
-        field_truth = self.define_linear_field(coeffs_truth, indices_f)
-
-        field = self.define_linear_field(coeffs, indices_f)
-        
-        return field_truth, field
-
-    def sample_points_and_vectors(
-        self, field, 
-        num_samples=3, margin = 0.15, singular_detail=False, 
-        num_samples_detail=10, margin_detail=0.05, return_complex=False):
-        points = []
-        margins = [margin] * len(self.F)
-        nums_samples = [num_samples] * len(self.F)
-        
-        if singular_detail:
-            for f in self.F_singular + self.F_over_pi:
-                nums_samples[f] = num_samples_detail
-                margins[f] = margin_detail
-        
-        for i, f in tqdm(enumerate(self.F), desc='Sampling points and vectors', 
-                         total=len(self.F), leave=False):
-            num_samples = nums_samples[i]
-            margin = margins[i]
-            for j in range(num_samples):
-                for k in range(num_samples - j):
-                    # Barycentric coordinates
-                    u = margin + (j / (num_samples-1)) * (1 - 3 * margin)
-                    v = margin + (k / (num_samples-1)) * (1 - 3 * margin)
-                    w = 1 - u - v
-                    
-                    # Interpolate to get the 3D point in the face
-                    points.append(
-                        u * self.V[f[0]] + v * self.V[f[1]] + w * self.V[f[2]]
-                    )
-                    
-        points = np.array(points)
-
-        if return_complex:
-            posis, vectors_complex, F_involved = field(points, return_complex=True)
-            return posis, vectors_complex, F_involved
-        else:
-            posis, vectors = field(points, return_complex)
-            return posis, vectors
-    
-
-
-
-
-
