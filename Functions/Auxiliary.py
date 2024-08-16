@@ -105,6 +105,44 @@ def compute_V_boundary(F):
     V_boundary = np.unique(np.array(E_boundary).flatten())
     
     return V_boundary
+
+
+# def safe_arccos(x):
+#     return np.arccos(np.clip(x, -1.0, 1.0))
+
+# def compute_angle_defect(V, F, V_boundary):
+#     angles = np.zeros(F.shape)
+    
+#     # Compute the angles of each face
+#     for i, face in tqdm(enumerate(F), 
+#                         desc='Computing angle defect', 
+#                         total=F.shape[0],
+#                         leave=False):
+#         v1, v2, v3 = V[face]
+#         angles[i, 0] = safe_arccos(np.dot(v2 - v1, v3 - v1) / 
+#                                    (np.linalg.norm(v2 - v1) * np.linalg.norm(v3 - v1)))
+#         angles[i, 1] = safe_arccos(np.dot(v1 - v2, v3 - v2) / 
+#                                    (np.linalg.norm(v1 - v2) * np.linalg.norm(v3 - v2)))
+#         angles[i, 2] = safe_arccos(np.dot(v1 - v3, v2 - v3) / 
+#                                    (np.linalg.norm(v1 - v3) * np.linalg.norm(v2 - v3)))
+    
+#     # Accumulate the angles at each vertex
+#     vertex_angles = np.zeros(V.shape[0])
+#     for i, face in enumerate(F):
+#         for j in range(3):
+#             vertex_angles[face[j]] += angles[i, j]
+    
+#     # Create a mask for boundary vertices
+#     boundVerticesMask = np.zeros(V.shape[0])
+#     if len(V_boundary) > 0:
+#         boundVerticesMask[V_boundary] = 1
+    
+#     # Calculate angle defect
+#     G_V = (2 * np.pi - vertex_angles) * (1 - boundVerticesMask) + \
+#           (np.pi - vertex_angles) * boundVerticesMask
+    
+#     return G_V
+
  
 def compute_angle_defect(V, F, V_boundary):
     angles = np.zeros(F.shape)

@@ -256,7 +256,7 @@ class Triangle_mesh():
         '''
             Compute the rotation between the pair of faces sharing an edge.
         '''
-        pair_rotations = np.zeros(self.E_comb.shape[0])
+        pair_rotations = np.zeros(self.E_comb.shape[0], dtype=complex)
         
         # The ith element in F_e and E represent the same edge
         for f_e in tqdm(self.F_e, 
@@ -279,15 +279,14 @@ class Triangle_mesh():
             
             U = complex_projection(B1, B2, normals, vec_e[None, :])
             
-            rotation = np.angle(U[1]) - np.angle(U[0])
-            # rotation = np.mod(rotation + np.pi, 2*np.pi) - np.pi
+            rotation = np.conjugate(U[0]) / np.conjugate(U[1])
             
             # The rotation is positive if the edge is aligned with the order face1 -> face2
             if np.all(self.E_comb[e1_comb] == f_e[[0, 3]]):
                 pair_rotations[e1_comb] = rotation
             # The rotation is negative if the edge is opposite to the order, i.e. face2 -> face1
             elif np.all(self.E_comb[e1_comb] == f_e[[3, 0]]):
-                pair_rotations[e1_comb] = -rotation
+                pair_rotations[e1_comb] = 1/rotation
             else:
                 raise ValueError(f'{self.E_comb[e1_comb]} and {f_e[[3, 0]]} do not match.')
             
@@ -296,7 +295,7 @@ class Triangle_mesh():
                 pair_rotations[e2_comb] = rotation
             # The rotation is negative if the edge is opposite to the face
             elif np.all(self.E_comb[e2_comb] == f_e[[2, 1]]):
-                pair_rotations[e2_comb] = -rotation
+                pair_rotations[e2_comb] = 1/rotation
             else:
                 raise ValueError(f'{self.E_comb[e2_comb]} and {f_e[[1, 2]]} do not match.')
             
@@ -318,8 +317,6 @@ class Triangle_mesh():
         self.singularities_f = {}
         self.indices_f = {}
         self.V_singular = []
-        
-        self.Beta = np.zeros(len(self.F_f))
         
         mask_removed_f = np.ones(len(self.F_f) + len(self.F_e) + len(self.F_v), dtype=bool)
         mask_removed_e = np.ones(len(self.E_extended), dtype=bool)
@@ -407,7 +404,6 @@ class Triangle_mesh():
                 
                 # Loop over the faces incident to the vertex
                 for f in np.where(np.any(np.isin(self.F, in_F_v), axis=1))[0]:
-                    self.Beta[f] += index
                     deal_singularity(f, singularity, index)
                 
                 for e_comb in self.F_v_map_E_comb[in_F_v[0]]:
@@ -435,7 +431,6 @@ class Triangle_mesh():
                         np.sum(np.isin(self.F_f, e), axis=1) == 2
                     )[0][0]
                     
-                    self.Beta[f] += index
                     deal_singularity(f, singularity, index)
                     
                     comb = [[0, 3], [1, 2]][i]
@@ -450,7 +445,6 @@ class Triangle_mesh():
             elif in_F_f is not False:
                 # Obtain the neighbour faces of the face containing the singularity
                 # and the unfolded locations of the singularity on those faces
-                self.Beta[in_F_f] += index
                 for _ in range(abs(index)):
                     deal_singularity(in_F_f, singularity, np.sign(index), in_face=True)
                 
@@ -465,7 +459,6 @@ class Triangle_mesh():
                 #         v_far, self.V[common_edge[0]], self.V[common_edge[1]], singularity
                 #     )
                     
-                #     self.Beta[f_neighbour] += index
                 #     deal_singularity(f_neighbour, singularity_unfolded, index)
                 
                 # # The face/edges of incident edge faces are zero and removed
@@ -493,16 +486,17 @@ class Triangle_mesh():
         
         # Q is the weight matrix, whose diagonal is the weights of the edges
         # Q = diags([weights_E], [0])
-        Q = eye(np.sum(mask_removed_e))
+        Q = eye(np.sum(mask_removed_e), format='lil')
+        Q[len(self.E_twin):, len(self.E_twin):] *= weight_comb
         Q = Q.tocoo()
         c = np.zeros(np.sum(mask_removed_e))
 
         # Quantities for quadratic programming dependent on the singularities
-        # E = self.d1[mask_removed_f][:, mask_removed_e].tocsc()
-        E = self.d1.tocsc()
+        E = self.d1[mask_removed_f][:, mask_removed_e].tocsc()
+        # E = self.d1.tocsc()
 
         d = (self.G_F - 2 * np.pi * self.I_F - self.d1 @ Theta)[mask_removed_f]
-        print(np.all(np.isclose(d, self.G_F)))
+        # print(np.all(np.isclose(d, self.G_F)))
         print(np.sum(np.abs(Theta)), np.sum(np.abs(self.I_F)), np.sum(np.abs(self.G_F)), np.sum(np.abs(self.d1 @ Theta)))
 
         # Define the system to solve the quadratic programming problem
@@ -524,7 +518,7 @@ class Triangle_mesh():
         
         return Theta
     
-    def reconstruct_corners_from_thetas(self, Theta, v_init, z_init, Theta_include_pairface=False):
+    def reconstruct_corners_from_thetas(self, Theta, v_init, z_init):
         '''
             Reconstruct the corner values from the thetas.
             Input:
@@ -535,22 +529,21 @@ class Triangle_mesh():
                 Us: (num_V_extended, num_singularities) complex array of corner values
         '''
         print('num of >pi rotations: ', np.sum(np.abs(Theta) > np.pi))
-        Theta_with_pairface = Theta.copy()
-        if not Theta_include_pairface:
-            Theta_with_pairface[len(self.E_twin):] += self.pair_rotations
+        total_rotations = np.exp(1j * Theta)
+        total_rotations[len(self.E_twin):] *= self.pair_rotations
         
         U = np.zeros(len(self.V_extended), dtype=complex)
+        U[v_init] = z_init
+        
         mask_removed_v = np.ones(len(self.V_extended), dtype=bool)
         mask_removed_v[self.V_singular] = False
+        mask_removed_v[v_init] = False
 
-        lhs = lil_matrix((len(self.E_extended) + 1, len(self.V_extended)), dtype=complex)
-        lhs[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = np.exp(1j * Theta_with_pairface)
+        lhs = lil_matrix((len(self.E_extended), len(self.V_extended)), dtype=complex)
+        lhs[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = total_rotations
         lhs[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
-        lhs[-1, v_init] = 1
         
-        rhs = np.zeros(len(self.E_extended) + 1, dtype=complex)
-        
-        rhs[-1] = z_init
+        rhs = -lhs @ U
         
         soln, _, itn, r1norm = lsqr(lhs[:, mask_removed_v], rhs)[:4]
         
@@ -567,7 +560,7 @@ class Triangle_mesh():
         self.F_over_pi = []
         num_subdivisions_f = {}
         
-        Theta_over_pi = np.abs(Theta) > np.pi
+        Theta_over_pi = np.abs(Theta) > np.pi/2
         print('Number of (twin-edge) thetas over pi: ', np.sum(Theta_over_pi[:len(self.E_twin)]))
         
         # Loop over the edges with >pi rotations and find the faces to subdivide
@@ -579,7 +572,7 @@ class Triangle_mesh():
             # Only non-singular faces can be subdivided
             if f not in self.F_singular:
                 # the number of subdivisions is based on the edge with the largest rotation
-                num = np.abs(Theta[e]) // (np.pi) + 1
+                num = np.abs(Theta[e]) // (np.pi/2) + 1
                 
                 if f not in self.F_over_pi:
                     self.F_over_pi.append(f)

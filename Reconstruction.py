@@ -12,7 +12,7 @@ np.set_printoptions(threshold=np.inf)
 
 if __name__ == '__main__':
     
-    V, F = load_off_file(os.path.join('..', 'data', 'rocker-arm2500.off'))
+    V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
     E = obtain_E(F)
 
     mesh = Triangle_mesh(V, F)
@@ -33,9 +33,9 @@ if __name__ == '__main__':
     # ])
     # indices = [-2, 2, -1, 1, -1, 1, -1, 1, -1, 1]
     # singularities = np.array([
-    #     V[70],
-    #     0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]]])
-    # indices = [1, -1]
+    #     V[70]
+    # ])
+    # indices = [2]
     singularities = np.array([])
     indices = []
     
@@ -47,7 +47,7 @@ if __name__ == '__main__':
     coeffs, coeffs_singular, coeffs_subdivided = mesh.reconstruct_linear_from_corners(U)
     
     posis, vectors_complex, F_involved = mesh.sample_field(
-        coeffs, coeffs_singular, coeffs_subdivided, num_samples=5, margin=0.1, 
+        coeffs, coeffs_singular, coeffs_subdivided, num_samples=3, margin=0.15, 
         singular_detail=True, num_samples_detail=10, margin_detail=0.05
     )
     
@@ -59,6 +59,8 @@ if __name__ == '__main__':
 
     ps.init()
     ps_mesh = ps.register_surface_mesh("Input Mesh", V, F, color=(0.95, 0.98, 1))
+
+    ps_mesh.add_scalar_quantity('Gaussian Curvature', mesh.G_V, enabled=False, cmap='blues')
 
     ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True, radius=0)
     ps_field.add_vector_quantity('Field', vectors, enabled=True, color=(0.03, 0.33, 0.77))
@@ -103,7 +105,7 @@ if __name__ == '__main__':
             )
                 
             posis, vectors_complex, F_involved = mesh.sample_field(
-                coeffs, coeffs_singular, coeffs_subdivided, num_samples=5, margin=0.1, 
+                coeffs, coeffs_singular, coeffs_subdivided, num_samples=3, margin=0.15, 
                 singular_detail=True, num_samples_detail=10, margin_detail=0.05
             )
 
@@ -118,7 +120,6 @@ if __name__ == '__main__':
             
         # vectors /= np.linalg.norm(vectors, axis=1)[:, None]
         
-        ps_mesh.remove_all_quantities()
         ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True)
         
         if(psim.Button("Unit length")):
