@@ -2,7 +2,7 @@ import numpy as np
 import polyscope as ps
 from Functions.Auxiliary import *
 from Functions.Mesh import Triangle_mesh
-from Functions.NonContractibleBases import *
+# from Functions.NonContractibleBases import *
 import os
 import polyscope.imgui as psim
 

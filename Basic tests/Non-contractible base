@@ -1,14 +1,15 @@
-import gudhi as gd
 import numpy as np
+from tqdm import tqdm
+from collections import defaultdict
 import os
-
+import networkx as nx
 
 def load_off_file(file_path):
     with open(file_path, 'r') as file:
         lines = file.readlines()
 
     # Parse the vertices and faces from the OFF file
-    num_vertices, _, _ = map(int, lines[1].split())
+    num_vertices, num_faces, _ = map(int, lines[1].split())
 
     vertices = np.array([list(map(float, line.split())) for line in lines[2:2 + num_vertices]])
     faces = np.array([list(map(int, line.split()))[1:] for line in lines[2 + num_vertices:]])
@@ -26,70 +27,86 @@ def obtain_E(F):
     
     return E
 
-def build_simplicial_complex(V, E, F):
-    st = gd.SimplexTree()
+def get_E_dual(V, E, F):
+    '''
+    Construct the dual graph
+    '''
+    E_dual = np.zeros((E.shape[0], 2), dtype=int)
     
-    # Add vertices
-    for v in V:
-        st.insert([v])
+    # Construct the dual edges
+    for i, edge in enumerate(E):
+        faces = np.where(np.isin(F, edge).sum(axis=1) == 2)[0]
+        if len(faces) == 2:
+            E_dual[i] = faces
+        else:
+            raise ValueError(f'Edge {edge} is not shared by exactly 2 faces.')
     
-    # Add edges
-    for e in E:
-        st.insert(e)
-    
-    # Add faces
-    for f in F:
-        st.insert(f)
-    
-    return st
+    return E_dual
 
-def compute_homology(st):
-    # Compute homology for dimension 1 (H_1)
-    st.compute_persistence()
-    return st.persistence_intervals_in_dimension(1)
+def find_noncontractible_cycles(E):
+    E_tuple = [tuple(e) for e in E]
+    E_dual = get_E_dual(V, E, F)
+    
+    # Create a graph from the mesh edges
+    G = nx.Graph()
+    G.add_edges_from(E_tuple)
+    
+    T = nx.minimum_spanning_tree(G)
+    
+    E_included = np.any((E[:, None] == np.array(T.edges())).all(-1), axis=1)
+    E_dual_tuple = [tuple(e) for e in E_dual[~E_included]]
+    
+    # Construct the dual graph, where the edges 
+    # of the previous spanning tree are removed
+    G_dual = nx.Graph()
+    G_dual.add_edges_from(E_dual_tuple)
+    T_dual = nx.minimum_spanning_tree(G_dual)
+    
+    # List to store non-contractible cycles
+    noncontractible_cycles = []
+    
+    # Track all cycles for later filtering
+    all_cycles = []
 
-def manual_reconstruct_cycle(st, birth_simplex, boundary):
-    # Initialize the cycle with the birth simplex
-    cycle = [birth_simplex]
+    for cotree_edge in tqdm(cotree_edges, 
+                            desc="Finding non-contractible cycles", 
+                            total=len(cotree_edges), 
+                            leave=False):
+        # Add the cotree edge back to form a cycle
+        T.add_edge(*cotree_edge)
+        
+        # Find the cycle created by adding this edge
+        cycle = nx.find_cycle(T, source=cotree_edge[0])
+        all_cycles.append(cycle)
+        
+        # Remove the edge again to restore the tree
+        T.remove_edge(*cotree_edge)
+    print(len(all_cycles))
+    lens_cycles = np.array([len(cycle) for cycle in all_cycles])
+    print(np.unique(lens_cycles, return_counts=True))
     
-    # Add boundary edges to the cycle
-    for simplex in boundary:
-        if len(simplex[0]) == 2:  # It's an edge
-            cycle.append(simplex[0])
-    
-    return cycle
+    raise
+    # Use the boundary operator to filter out contractible cycles
+    # Simple heuristic: check if cycle is a boundary of some 2D region in the mesh
+    for cycle in all_cycles:
+        if not is_contractible(G, cycle):
+            noncontractible_cycles.append(cycle)
 
-def extract_non_contractible_cycles(st):
-    st.compute_persistence()
-    persistence_pairs = st.persistence_pairs()
-    print(persistence_pairs)
-    
-    non_contractible_cycles = []
-    
-    for pair in persistence_pairs:
-        for boundary in st.get_boundaries(pair[0]):
-            print(boundary)
-            cycle = manual_reconstruct_cycle(st, pair[0], boundary)
-    
-            non_contractible_cycles.append(cycle)
-    
-    return non_contractible_cycles
+    return noncontractible_cycles
 
+def is_contractible(G, cycle):
+    # Basic heuristic: a contractible cycle would usually bound a face in a planar graph
+    subgraph = G.subgraph([v for edge in cycle for v in edge])
+    if nx.is_planar(subgraph):
+        # More advanced checks can be added here
+        return True
+    return False
 
-
-# Example inputs
-V, F = load_off_file(os.path.join('..', "data", "Kitten.off"))
+# Example usage
+V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
 E = obtain_E(F)
-V_indices = np.arange(len(V))
-F = [tuple(f) for f in F]
-E = [tuple(e) for e in E]
 
-st = build_simplicial_complex(V_indices, E, F)
-cycles = compute_homology(st)
-basis_cycles = extract_non_contractible_cycles(st)
-
-print("Homology group H_1:", cycles)
-print("Basis for non-contractible cycles:", basis_cycles)
-
-
-
+primal_cycles = find_noncontractible_cycles(mesh_edges)
+print("Primal Non-Contractible Cycles:")
+for cycle in primal_cycles:
+    print(cycle)
