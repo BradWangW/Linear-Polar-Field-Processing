@@ -1,0 +1,95 @@
+import gudhi as gd
+import numpy as np
+import os
+
+
+def load_off_file(file_path):
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+
+    # Parse the vertices and faces from the OFF file
+    num_vertices, _, _ = map(int, lines[1].split())
+
+    vertices = np.array([list(map(float, line.split())) for line in lines[2:2 + num_vertices]])
+    faces = np.array([list(map(int, line.split()))[1:] for line in lines[2 + num_vertices:]])
+
+    return vertices, faces
+        
+def obtain_E(F):
+    '''
+    Obtain the edge list from the face list.
+    '''
+    E = np.concatenate([
+        F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]
+    ])
+    E = np.unique(np.sort(E, axis=1), axis=0)
+    
+    return E
+
+def build_simplicial_complex(V, E, F):
+    st = gd.SimplexTree()
+    
+    # Add vertices
+    for v in V:
+        st.insert([v])
+    
+    # Add edges
+    for e in E:
+        st.insert(e)
+    
+    # Add faces
+    for f in F:
+        st.insert(f)
+    
+    return st
+
+def compute_homology(st):
+    # Compute homology for dimension 1 (H_1)
+    st.compute_persistence()
+    return st.persistence_intervals_in_dimension(1)
+
+def manual_reconstruct_cycle(st, birth_simplex, boundary):
+    # Initialize the cycle with the birth simplex
+    cycle = [birth_simplex]
+    
+    # Add boundary edges to the cycle
+    for simplex in boundary:
+        if len(simplex[0]) == 2:  # It's an edge
+            cycle.append(simplex[0])
+    
+    return cycle
+
+def extract_non_contractible_cycles(st):
+    st.compute_persistence()
+    persistence_pairs = st.persistence_pairs()
+    print(persistence_pairs)
+    
+    non_contractible_cycles = []
+    
+    for pair in persistence_pairs:
+        for boundary in st.get_boundaries(pair[0]):
+            print(boundary)
+            cycle = manual_reconstruct_cycle(st, pair[0], boundary)
+    
+            non_contractible_cycles.append(cycle)
+    
+    return non_contractible_cycles
+
+
+
+# Example inputs
+V, F = load_off_file(os.path.join('..', "data", "Kitten.off"))
+E = obtain_E(F)
+V_indices = np.arange(len(V))
+F = [tuple(f) for f in F]
+E = [tuple(e) for e in E]
+
+st = build_simplicial_complex(V_indices, E, F)
+cycles = compute_homology(st)
+basis_cycles = extract_non_contractible_cycles(st)
+
+print("Homology group H_1:", cycles)
+print("Basis for non-contractible cycles:", basis_cycles)
+
+
+

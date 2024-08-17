@@ -256,7 +256,7 @@ class Triangle_mesh():
         '''
             Compute the rotation between the pair of faces sharing an edge.
         '''
-        pair_rotations = np.zeros(self.E_comb.shape[0], dtype=complex)
+        pair_rotations = np.zeros(self.E_comb.shape[0])
         
         # The ith element in F_e and E represent the same edge
         for f_e in tqdm(self.F_e, 
@@ -279,14 +279,14 @@ class Triangle_mesh():
             
             U = complex_projection(B1, B2, normals, vec_e[None, :])
             
-            rotation = np.conjugate(U[0]) / np.conjugate(U[1])
+            rotation = np.angle(np.conjugate(U[0]) / np.conjugate(U[1]))
             
             # The rotation is positive if the edge is aligned with the order face1 -> face2
             if np.all(self.E_comb[e1_comb] == f_e[[0, 3]]):
                 pair_rotations[e1_comb] = rotation
             # The rotation is negative if the edge is opposite to the order, i.e. face2 -> face1
             elif np.all(self.E_comb[e1_comb] == f_e[[3, 0]]):
-                pair_rotations[e1_comb] = 1/rotation
+                pair_rotations[e1_comb] = -rotation
             else:
                 raise ValueError(f'{self.E_comb[e1_comb]} and {f_e[[3, 0]]} do not match.')
             
@@ -295,7 +295,7 @@ class Triangle_mesh():
                 pair_rotations[e2_comb] = rotation
             # The rotation is negative if the edge is opposite to the face
             elif np.all(self.E_comb[e2_comb] == f_e[[2, 1]]):
-                pair_rotations[e2_comb] = 1/rotation
+                pair_rotations[e2_comb] = -rotation
             else:
                 raise ValueError(f'{self.E_comb[e2_comb]} and {f_e[[1, 2]]} do not match.')
             
@@ -495,7 +495,7 @@ class Triangle_mesh():
         E = self.d1[mask_removed_f][:, mask_removed_e].tocsc()
         # E = self.d1.tocsc()
 
-        d = (self.G_F - 2 * np.pi * self.I_F - self.d1 @ Theta)[mask_removed_f]
+        d = (2 * np.pi * self.I_F - self.G_F - self.d1 @ Theta)[mask_removed_f]
         # print(np.all(np.isclose(d, self.G_F)))
         print(np.sum(np.abs(Theta)), np.sum(np.abs(self.I_F)), np.sum(np.abs(self.G_F)), np.sum(np.abs(self.d1 @ Theta)))
 
@@ -516,6 +516,12 @@ class Triangle_mesh():
         
         print(f'Total combinatorial rotations: {np.sum(np.abs(Theta[len(self.E_twin):]))}.')
         
+        true_rot = np.mod(Theta + np.pi, 2*np.pi) - np.pi
+        true_rot[len(self.E_twin):] += self.pair_rotations
+        cycle_sums = self.d1 @ true_rot + self.G_F
+        
+        print(f'Top 5 largest cycle sums: {np.sort(np.abs(cycle_sums))[-5:]}', np.max(np.abs(cycle_sums)))
+        
         return Theta
     
     def reconstruct_corners_from_thetas(self, Theta, v_init, z_init):
@@ -529,8 +535,9 @@ class Triangle_mesh():
                 Us: (num_V_extended, num_singularities) complex array of corner values
         '''
         print('num of >pi rotations: ', np.sum(np.abs(Theta) > np.pi))
+        
+        Theta[len(self.E_twin):] += self.pair_rotations
         total_rotations = np.exp(1j * Theta)
-        total_rotations[len(self.E_twin):] *= self.pair_rotations
         
         U = np.zeros(len(self.V_extended), dtype=complex)
         U[v_init] = z_init

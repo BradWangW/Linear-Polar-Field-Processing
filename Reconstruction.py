@@ -2,6 +2,7 @@ import numpy as np
 import polyscope as ps
 from Functions.Auxiliary import *
 from Functions.Mesh import Triangle_mesh
+from Functions.NonContractibleBases import *
 import os
 import polyscope.imgui as psim
 
@@ -32,12 +33,13 @@ if __name__ == '__main__':
     #     0.2 * V[F[5, 0]] + 0.2 * V[F[5, 1]] + 0.6 * V[F[5, 2]]
     # ])
     # indices = [-2, 2, -1, 1, -1, 1, -1, 1, -1, 1]
-    # singularities = np.array([
-    #     V[70]
-    # ])
-    # indices = [2]
-    singularities = np.array([])
-    indices = []
+    singularities = np.array([
+        V[70], 
+        V[205],
+    ])
+    indices = [1, -1]
+    # singularities = np.array([])
+    # indices = []
     
     v_init = 100
     z_init = 1
@@ -64,6 +66,12 @@ if __name__ == '__main__':
 
     ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True, radius=0)
     ps_field.add_vector_quantity('Field', vectors, enabled=True, color=(0.03, 0.33, 0.77))
+    
+    # H1_basis = compute_homology_basis(V, E, F)
+
+    # # Print result
+    # for i, basis in enumerate(H1_basis):
+    #     print(f"Basis {i}: {basis}")
             
     for f in mesh.F_over_pi:
         ps.register_surface_mesh(f"F_over_pi{f}", mesh.V_subdivided[f], mesh.F_subdivided[f], enabled=True)

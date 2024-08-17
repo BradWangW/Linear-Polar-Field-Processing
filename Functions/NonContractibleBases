@@ -1,0 +1,105 @@
+import numpy as np
+from scipy.sparse import lil_matrix
+from scipy.linalg import orth
+import os
+from tqdm import tqdm
+
+
+def load_off_file(file_path):
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+
+    # Parse the vertices and faces from the OFF file
+    num_vertices, _, _ = map(int, lines[1].split())
+
+    vertices = np.array([list(map(float, line.split())) for line in lines[2:2 + num_vertices]])
+    faces = np.array([list(map(int, line.split()))[1:] for line in lines[2 + num_vertices:]])
+
+    return vertices, faces
+        
+def obtain_E(F):
+    '''
+    Obtain the edge list from the face list.
+    '''
+    E = np.concatenate([
+        F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]
+    ])
+    E = np.unique(np.sort(E, axis=1), axis=0)
+    
+    return E
+
+def compute_boundary_matrix_1(V, E):
+    n_edges = len(E)
+    n_vertices = len(V)
+    B1 = lil_matrix((n_vertices, n_edges), dtype=int)
+    
+    for i, (v1, v2) in tqdm(enumerate(E), 
+                            desc='Computing boundary matrix 1', 
+                            total=len(E),
+                            leave=False):
+        B1[v1, i] = 1
+        B1[v2, i] = -1
+    
+    return B1
+
+def compute_boundary_matrix_2(E, F):
+    n_faces = len(F)
+    n_edges = len(E)
+    B2 = lil_matrix((n_edges, n_faces), dtype=int)
+    
+    edge_map = {frozenset(e): idx for idx, e in enumerate(E)}
+    
+    for i, face in tqdm(enumerate(F), 
+                        desc='Computing boundary matrix 2', 
+                        total=len(F),
+                        leave=False):
+        for j in range(len(face)):
+            e = frozenset([face[j], face[(j + 1) % len(face)]])
+            sign = 1 if (face[j], face[(j + 1) % len(face)]) in edge_map else -1
+            B2[edge_map[e], i] = sign
+    
+    return B2
+
+def compute_kernel(matrix):
+    u, s, vh = np.linalg.svd(matrix.toarray())
+    tol = 1e-10
+    null_mask = (s <= tol)
+    null_space = np.compress(null_mask, vh, axis=0)
+    return null_space.T
+
+def compute_homology_basis(V, E, F):
+    B1 = compute_boundary_matrix_1(V, E)
+    B2 = compute_boundary_matrix_2(E, F)
+    
+    # Compute cycle space (kernel of B1)
+    cycle_space = compute_kernel(B1)
+    
+    # Compute boundary space (image of B2)
+    boundary_space = B2.toarray()
+
+    # Orthogonalize the boundary space to create a basis
+    boundary_space_orth = orth(boundary_space)
+    
+    # Find homology basis as cycles not in the boundary space
+    homology_basis = []
+    for cycle in tqdm(cycle_space.T, 
+                      desc='Computing homology basis', 
+                      total=cycle_space.shape[1], 
+                      leave=False):
+        projection = boundary_space_orth @ (np.linalg.pinv(boundary_space_orth) @ cycle)
+        residual = cycle - projection
+        if np.linalg.norm(residual) > 1e-10:  # non-trivial cycle
+            homology_basis.append(cycle)
+    
+    return homology_basis
+
+# # Example mesh
+# V, F = load_off_file(os.path.join('..', 'data', '3holes.off'))
+# E = obtain_E(F)
+
+# # Compute homology basis
+# H1_basis = compute_homology_basis(V, E, F)
+
+# # Print result
+# for i, basis in enumerate(H1_basis):
+#     print(f"Basis {i}: {basis}")
