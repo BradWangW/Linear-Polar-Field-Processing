@@ -9,7 +9,7 @@ def load_off_file(file_path):
         lines = file.readlines()
 
     # Parse the vertices and faces from the OFF file
-    num_vertices, num_faces, _ = map(int, lines[1].split())
+    num_vertices, _, _ = map(int, lines[1].split())
 
     vertices = np.array([list(map(float, line.split())) for line in lines[2:2 + num_vertices]])
     faces = np.array([list(map(int, line.split()))[1:] for line in lines[2 + num_vertices:]])
@@ -27,9 +27,9 @@ def obtain_E(F):
     
     return E
 
-def get_E_dual(V, E, F):
+def get_E_dual(E, F):
     '''
-    Construct the dual graph
+    Construct the dual edges of the mesh.
     '''
     E_dual = np.zeros((E.shape[0], 2), dtype=int)
     
@@ -43,17 +43,27 @@ def get_E_dual(V, E, F):
     
     return E_dual
 
-def find_noncontractible_cycles(E):
+def get_genus(graph):
+    # Step 1: Calculate the number of vertices (V) and edges (E)
+    V = graph.number_of_nodes()
+    E = graph.number_of_edges()
+    F = (2 * E) // 3
+
+    return (2 - (V - E + F)) // 2
+
+def get_homology_basis(E, F):
     E_tuple = [tuple(e) for e in E]
-    E_dual = get_E_dual(V, E, F)
+    E_dual = get_E_dual(E, F)
     
     # Create a graph from the mesh edges
     G = nx.Graph()
     G.add_edges_from(E_tuple)
     
     T = nx.minimum_spanning_tree(G)
+    T_arr = np.array(T.edges())
     
-    E_included = np.any((E[:, None] == np.array(T.edges())).all(-1), axis=1)
+    E_included = np.any((E[:, None] == T_arr).all(-1) | 
+                        (E[:, None] == T_arr[:, ::-1]).all(-1), axis=1)
     E_dual_tuple = [tuple(e) for e in E_dual[~E_included]]
     
     # Construct the dual graph, where the edges 
@@ -61,52 +71,42 @@ def find_noncontractible_cycles(E):
     G_dual = nx.Graph()
     G_dual.add_edges_from(E_dual_tuple)
     T_dual = nx.minimum_spanning_tree(G_dual)
+    T_dual_arr = np.array(T_dual.edges())
+    
+    E_dual_included = np.any((E_dual[:, None] == T_dual_arr).all(-1) | 
+                             (E_dual[:, None] == T_dual_arr[:, ::-1]).all(-1), axis=1)
+    
+    E_either_included = E_included | E_dual_included
+    
+    E_co = E[~E_either_included]
+    
+    if len(E_co) != 2*get_genus(G):
+        raise ValueError(f"Expected {2*get_genus(G)} non-contractible edges, but found {len(E_co)}")
     
     # List to store non-contractible cycles
-    noncontractible_cycles = []
-    
-    # Track all cycles for later filtering
-    all_cycles = []
+    cycles = []
 
-    for cotree_edge in tqdm(cotree_edges, 
+    for cotree_edge in tqdm(E_co, 
                             desc="Finding non-contractible cycles", 
-                            total=len(cotree_edges), 
+                            total=len(E_co),
                             leave=False):
         # Add the cotree edge back to form a cycle
         T.add_edge(*cotree_edge)
         
         # Find the cycle created by adding this edge
         cycle = nx.find_cycle(T, source=cotree_edge[0])
-        all_cycles.append(cycle)
+        cycles.append(np.array(cycle))
         
         # Remove the edge again to restore the tree
         T.remove_edge(*cotree_edge)
-    print(len(all_cycles))
-    lens_cycles = np.array([len(cycle) for cycle in all_cycles])
-    print(np.unique(lens_cycles, return_counts=True))
-    
-    raise
-    # Use the boundary operator to filter out contractible cycles
-    # Simple heuristic: check if cycle is a boundary of some 2D region in the mesh
-    for cycle in all_cycles:
-        if not is_contractible(G, cycle):
-            noncontractible_cycles.append(cycle)
 
-    return noncontractible_cycles
-
-def is_contractible(G, cycle):
-    # Basic heuristic: a contractible cycle would usually bound a face in a planar graph
-    subgraph = G.subgraph([v for edge in cycle for v in edge])
-    if nx.is_planar(subgraph):
-        # More advanced checks can be added here
-        return True
-    return False
+    return cycles
 
 # Example usage
 V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
 E = obtain_E(F)
 
-primal_cycles = find_noncontractible_cycles(mesh_edges)
+primal_cycles = get_homology_basis(E)
 print("Primal Non-Contractible Cycles:")
 for cycle in primal_cycles:
     print(cycle)

@@ -7,6 +7,7 @@ from Functions.Auxiliary import (accumarray, find_indices, is_in_face, compute_p
                                  compute_angle_defect, compute_cot_weights)
 from scipy.sparse.linalg import lsqr
 import cvxopt
+import networkx as nx
 
 
 class Triangle_mesh():
@@ -24,12 +25,89 @@ class Triangle_mesh():
         
         self.cot_weights = compute_cot_weights(V, self.E, F)
         
+        self.genus = (2 - (V.shape[0] - self.E.shape[0] + F.shape[0])) / 2
+        
         self.B1, self.B2, self.normals = compute_planes(V, F)
         
+        self.E_non_contractible_cycles = self.get_homology_basis()
+        print(self.E_non_contractible_cycles)
+        print(len(self.E_non_contractible_cycles))
+        
+    def get_E_dual(self):
+        '''
+        Construct the dual edges of the mesh.
+        '''
+        E_dual = np.zeros((len(self.E), 2), dtype=int)
+        
+        # Construct the dual edges
+        for i, edge in tqdm(enumerate(self.E), 
+                            desc='Constructing dual edges',
+                            total=len(self.E),
+                            leave=False):
+            faces = np.where(np.isin(self.F, edge).sum(axis=1) == 2)[0] 
+            
+            if len(faces) == 2:
+                E_dual[i] = faces
+            else:
+                raise ValueError(f'Wrong number of faces found for edge {edge}: {faces}.')
+        
+        return E_dual
+
+    def get_homology_basis(self):
+        E_tuple = [tuple(e) for e in self.E]
+        E_dual = self.get_E_dual()
+        
+        # Create a graph from the mesh edges
+        G = nx.Graph()
+        G.add_edges_from(E_tuple)
+        
+        T = nx.minimum_spanning_tree(G)
+        T_arr = np.array(T.edges())
+        
+        E_included = np.any((self.E[:, None] == T_arr).all(-1) | 
+                            (self.E[:, None] == T_arr[:, ::-1]).all(-1), axis=1)
+        E_dual_tuple = [tuple(e) for e in E_dual[~E_included]]
+        
+        # Construct the dual graph, where the edges 
+        # of the previous spanning tree are removed
+        G_dual = nx.Graph()
+        G_dual.add_edges_from(E_dual_tuple)
+        T_dual = nx.minimum_spanning_tree(G_dual)
+        T_dual_arr = np.array(T_dual.edges())
+        
+        E_dual_included = np.any((E_dual[:, None] == T_dual_arr).all(-1) | 
+                                 (E_dual[:, None] == T_dual_arr[:, ::-1]).all(-1), axis=1)
+        
+        E_either_included = E_included | E_dual_included
+        
+        E_co = self.E[~E_either_included]
+        
+        if len(E_co) != 2*self.genus:
+            raise ValueError(f"Expected {2*self.genus} non-contractible edges, but found {len(E_co)}")
+        
+        # List to store non-contractible cycles
+        cycles = []
+
+        for cotree_edge in tqdm(E_co, 
+                                desc="Finding non-contractible cycles", 
+                                total=len(E_co),
+                                leave=False):
+            # Add the cotree edge back to form a cycle
+            T.add_edge(*cotree_edge)
+            
+            # Find the cycle created by adding this edge
+            cycles.append(nx.find_cycle(T, source=cotree_edge[0]))
+            
+            # Remove the edge again to restore the tree
+            T.remove_edge(*cotree_edge)
+
+        return cycles
+    
     def initialise_field_processing(self):
         steps = [
             self.construct_extended_mesh,
             self.construct_d1_extended,
+            self.compute_H_extended,
             self.compute_face_pair_rotation
         ]
         for step in tqdm(steps, 
@@ -44,8 +122,6 @@ class Triangle_mesh():
             the extended vertices, twin edges and combinatorial edges,
             face-faces, edge-faces, and vertex-faces.
         '''
-        
-        # sum_degree = np.sum(np.count_nonzero(self.E == v, axis=1) for v in range(self.V.shape[0]))
         
         V_extended = []
         E_twin = np.zeros((self.F.shape[0] * 3, 2), dtype=int)
@@ -251,6 +327,23 @@ class Triangle_mesh():
             ] = 1
             
         self.d1 = d1
+    
+    def compute_H_extended(self):
+        '''
+            Compute the homology basis for the extended mesh.
+        '''
+        H = np.zeros((len(self.non_contractible_cycles), len(self.E_extended)))
+        
+        for i, cycle in tqdm(enumerate(self.E_non_contractible_cycles), 
+                            desc='Computing extended homology basis', 
+                            total=len(self.E_non_contractible_cycles), 
+                            leave=False):
+            for j, e in tqdm(enumerate(e_involved),
+                            desc='Processing edges -> extended edges', 
+                            total=len(e_involved), 
+                            leave=False):
+                
+                
         
     def compute_face_pair_rotation(self):
         '''

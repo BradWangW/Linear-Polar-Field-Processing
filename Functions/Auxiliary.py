@@ -1,6 +1,7 @@
 import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
+import networkx as nx
 
 def load_off_file(file_path):
     with open(file_path, 'r') as file:
@@ -35,8 +36,6 @@ def obtain_E(F):
     E = np.unique(np.sort(E, axis=1), axis=0)
     
     return E
-
-import numpy as np
 
 def compute_cot_weights(V, E, F):
     # Number of vertices and edges
