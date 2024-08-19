@@ -1,6 +1,6 @@
 import numpy as np
 from tqdm import tqdm
-from scipy.sparse import lil_matrix, eye, bmat, diags
+from scipy.sparse import lil_matrix, eye, bmat, diags, vstack
 from Functions.Auxiliary import (accumarray, find_indices, is_in_face, compute_planes, 
                                  complex_projection, obtain_E, compute_V_boundary, 
                                  compute_unfolded_vertex, compute_barycentric_coordinates, 
@@ -23,6 +23,8 @@ class Triangle_mesh():
         
         self.G_V = compute_angle_defect(V, F, self.V_boundary)
         
+        print(np.sort(self.G_V)[:5], np.sort(self.G_V)[-5:])
+        
         self.cot_weights = compute_cot_weights(V, self.E, F)
         
         self.genus = (2 - (V.shape[0] - self.E.shape[0] + F.shape[0])) / 2
@@ -30,8 +32,7 @@ class Triangle_mesh():
         self.B1, self.B2, self.normals = compute_planes(V, F)
         
         self.E_non_contractible_cycles = self.get_homology_basis()
-        print(self.E_non_contractible_cycles)
-        print(len(self.E_non_contractible_cycles))
+        print('Genus of the mesh:', self.genus)
         
     def get_E_dual(self):
         '''
@@ -107,7 +108,7 @@ class Triangle_mesh():
         steps = [
             self.construct_extended_mesh,
             self.construct_d1_extended,
-            self.compute_H_extended,
+            self.compute_homology_extended,
             self.compute_face_pair_rotation
         ]
         for step in tqdm(steps, 
@@ -328,22 +329,70 @@ class Triangle_mesh():
             
         self.d1 = d1
     
-    def compute_H_extended(self):
+    def compute_homology_extended(self):
         '''
             Compute the homology basis for the extended mesh.
         '''
-        H = np.zeros((len(self.non_contractible_cycles), len(self.E_extended)))
+        H = np.zeros((len(self.E_non_contractible_cycles), len(self.E_extended)))
+        G_H = np.zeros(len(self.E_non_contractible_cycles))
         
         for i, cycle in tqdm(enumerate(self.E_non_contractible_cycles), 
                             desc='Computing extended homology basis', 
                             total=len(self.E_non_contractible_cycles), 
                             leave=False):
-            for j, e in tqdm(enumerate(e_involved),
+            for j, e in tqdm(enumerate(cycle),
                             desc='Processing edges -> extended edges', 
-                            total=len(e_involved), 
+                            total=len(cycle),
                             leave=False):
                 
+                e_next = cycle[(j+1) % len(cycle)]
                 
+                indices1_extended = self.V_map[e[0]]
+                indices2_extended = self.V_map[e[1]]
+                indices1_next_extended = self.V_map[e_next[0]]
+                indices2_next_extended = self.V_map[e_next[1]]
+                
+                # set a corresponding twin edge to 1 or -1, depending on the orientation
+                e_twin = np.where(np.all(
+                        np.isin(self.E_twin, indices1_extended + indices2_extended), 
+                        axis=1
+                ))[0][0]
+                
+                if self.E_twin[e_twin][0] in indices1_extended:
+                    H[i, e_twin] = 1
+                    reverse = 0
+                elif self.E_twin[e_twin][1] in indices1_extended:
+                    H[i, e_twin] = -1
+                    reverse = 1
+                else:
+                    raise ValueError('The twin edge is not aligned with the edge.')
+                
+                # For each additional combinatorial edges, check for the orientation
+                e_twin_next = np.where(np.all(
+                        np.isin(self.E_twin, indices1_next_extended + indices2_next_extended),
+                        axis=1
+                ))[0][0]
+                f_v = self.F_v[e[1]]
+                
+                if self.E_twin[e_twin_next][0] in indices1_next_extended:
+                    reverse_next = 0
+                elif self.E_twin[e_twin_next][1] in indices1_next_extended:
+                    reverse_next = 1
+                
+                start = np.where(np.isin(f_v, self.E_twin[e_twin][1 - reverse]))[0][0]
+                end = np.where(np.isin(f_v, self.E_twin[e_twin_next][reverse_next]))[0][0]
+
+                if start < end:
+                    for k in range(start, end):
+                        H[i, self.F_v_map_E_comb[e[1]][k] + len(self.E_twin)] = 1
+                elif end < start:
+                    for k in range(end, start):
+                        H[i, self.F_v_map_E_comb[e[1]][k] + len(self.E_twin)] = -1
+                        
+                G_H[i] += self.G_V[e[0]]
+                
+        self.H = H
+        self.G_H = G_H
         
     def compute_face_pair_rotation(self):
         '''
@@ -365,6 +414,7 @@ class Triangle_mesh():
             
             f1_f = np.where(np.any(np.isin(self.F_f, f_e[0]), axis=1))[0]
             f2_f = np.where(np.any(np.isin(self.F_f, f_e[3]), axis=1))[0]
+            
             
             B1, B2, normals = (self.B1[[f1_f, f2_f]].squeeze(), 
                                self.B2[[f1_f, f2_f]].squeeze(), 
@@ -394,13 +444,15 @@ class Triangle_mesh():
             
         self.pair_rotations = pair_rotations
             
-    def compute_thetas(self, singularities=None, indices=None, weight_comb=10):
+    def compute_thetas(self, singularities=None, indices=None, weight_comb=1, non_contractible_indices=None):
         '''
             Compute the set of thetas for each face singularity 
             by constrained optimisation using the KKT conditions.
         '''
         if len(singularities) != len(indices):
             raise ValueError('The number of singularities and the number of indices do not match.')
+        if non_contractible_indices is None:
+            non_contractible_indices = np.zeros(len(self.E_non_contractible_cycles))
             
         # Construct the index array and filter singular faces
         self.I_F = np.zeros(len(self.F_f) + len(self.F_e) + len(self.F_v))
@@ -492,6 +544,7 @@ class Triangle_mesh():
             # If the singularity is in a vertex, it gives the thetas for the incident faces
             if len(in_F_v) == 1:
                 # self.I_F[len(self.F_f) + len(self.F_e) + in_F_v[0]] = -index
+                
                 if self.V_map[in_F_v[0]][0] not in self.V_singular:
                     self.V_singular += self.V_map[in_F_v[0]]
                 
@@ -517,6 +570,7 @@ class Triangle_mesh():
             # If the singularity is in an edge, it gives the thetas for the incident faces
             elif len(in_F_e) == 1:
                 # self.I_F[len(self.F_f) + in_F_e[0]] = -index
+                
                 # Loop over the two faces incident to the edge
                 for i in range(2):
                     e = self.F_e[in_F_e[0]][2*i:2*(i+1)]
@@ -585,12 +639,18 @@ class Triangle_mesh():
         c = np.zeros(np.sum(mask_removed_e))
 
         # Quantities for quadratic programming dependent on the singularities
-        E = self.d1[mask_removed_f][:, mask_removed_e].tocsc()
+        E = vstack([
+            self.d1[mask_removed_f][:, mask_removed_e],
+            self.H[:, mask_removed_e]
+        ], format='coo')
         # E = self.d1.tocsc()
+        
+        print(E.shape)
 
-        d = (2 * np.pi * self.I_F - self.G_F - self.d1 @ Theta)[mask_removed_f]
-        # print(np.all(np.isclose(d, self.G_F)))
-        print(np.sum(np.abs(Theta)), np.sum(np.abs(self.I_F)), np.sum(np.abs(self.G_F)), np.sum(np.abs(self.d1 @ Theta)))
+        d = np.concatenate([
+            2 * np.pi * self.I_F[mask_removed_f] - self.G_F[mask_removed_f] - self.d1[mask_removed_f] @ Theta, 
+            2 * np.pi * np.array(non_contractible_indices) - self.G_H - self.H @ Theta
+        ])
 
         # Define the system to solve the quadratic programming problem
         KKT_lhs = bmat([
@@ -609,11 +669,11 @@ class Triangle_mesh():
         
         print(f'Total combinatorial rotations: {np.sum(np.abs(Theta[len(self.E_twin):]))}.')
         
-        true_rot = np.mod(Theta + np.pi, 2*np.pi) - np.pi
-        true_rot[len(self.E_twin):] += self.pair_rotations
-        cycle_sums = self.d1 @ true_rot + self.G_F
-        
-        print(f'Top 5 largest cycle sums: {np.sort(np.abs(cycle_sums))[-5:]}', np.max(np.abs(cycle_sums)))
+        # true_rot = np.mod(Theta + np.pi, 2*np.pi) - np.pi
+        # cycle_sums = vstack([
+        #     self.d1,
+        #     self.H
+        # ]) @ true_rot + np.concatenate([self.G_F, self.G_H])
         
         return Theta
     
@@ -627,30 +687,56 @@ class Triangle_mesh():
             Output:
                 Us: (num_V_extended, num_singularities) complex array of corner values
         '''
-        print('num of >pi rotations: ', np.sum(np.abs(Theta) > np.pi))
+        Theta_complete = Theta.copy()
+        Theta_complete[len(self.E_twin):] += self.pair_rotations
         
-        Theta[len(self.E_twin):] += self.pair_rotations
-        total_rotations = np.exp(1j * Theta)
         
-        U = np.zeros(len(self.V_extended), dtype=complex)
-        U[v_init] = z_init
+        E_extended_tuple = [tuple(e) for e in self.E_extended]
         
-        mask_removed_v = np.ones(len(self.V_extended), dtype=bool)
-        mask_removed_v[self.V_singular] = False
-        mask_removed_v[v_init] = False
+        # Create a graph from the mesh edges
+        G = nx.Graph()
+        G.add_edges_from(E_extended_tuple)
+        
+        T = nx.minimum_spanning_tree(G)
+        T_arr = np.array(T.edges())
+        
+        E_extended_included = np.any((self.E_extended[:, None] == T_arr).all(-1) | 
+                                     (self.E_extended[:, None] == T_arr[:, ::-1]).all(-1), axis=1)
+        E_extended_extracted = self.E_extended[E_extended_included]
+        num_included = np.sum(E_extended_included)
+        
+        R = np.zeros(len(self.V_extended))
+        R[v_init] = np.abs(z_init)
 
-        lhs = lil_matrix((len(self.E_extended), len(self.V_extended)), dtype=complex)
-        lhs[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = total_rotations
-        lhs[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
+        lhs_U = lil_matrix((num_included + 1, len(self.V_extended)), dtype=complex)
+        lhs_U[np.arange(num_included), E_extended_extracted[:, 0]] = -1
+        lhs_U[np.arange(num_included), E_extended_extracted[:, 1]] = 1
+        lhs_U[num_included, v_init] = 1
+        print(Theta_complete[E_extended_included].shape)
+        rhs_U = np.concatenate([
+            Theta_complete[E_extended_included],
+            [np.angle(z_init)]
+        ])
         
-        rhs = -lhs @ U
+        U, _, itn, r1norm = lsqr(lhs_U, rhs_U)[:4]
         
-        soln, _, itn, r1norm = lsqr(lhs[:, mask_removed_v], rhs)[:4]
-        
-        U[mask_removed_v] = soln
-            
-        print(f'Corner reconstruction iterations and residuals',
+        print(f'Corner argument reconstruction iterations and residuals',
               itn, r1norm)
+
+        lhs_R = lil_matrix((len(self.E_extended) + 1, len(self.V_extended)))
+        lhs_R[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = 1
+        lhs_R[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
+        lhs_R[-1, v_init] = 1
+        
+        rhs_R = np.zeros(len(self.E_extended)+1)
+        rhs_R[-1] = np.abs(z_init)
+        
+        R, _, itn, r1norm = lsqr(lhs_R, rhs_R)[:4]
+        
+        print(f'Corner radius reconstruction iterations and residuals',
+              itn, r1norm)
+        
+        U = np.exp(R + (1j * U))
         
         return U
     
@@ -661,7 +747,7 @@ class Triangle_mesh():
         num_subdivisions_f = {}
         
         Theta_over_pi = np.abs(Theta) > np.pi/2
-        print('Number of (twin-edge) thetas over pi: ', np.sum(Theta_over_pi[:len(self.E_twin)]))
+        print('Number of thetas over pi: ', np.sum(Theta_over_pi))
         
         # Loop over the edges with >pi rotations and find the faces to subdivide
         for e in np.where(Theta_over_pi[:len(self.E_twin)])[0]:
@@ -982,8 +1068,8 @@ class Triangle_mesh():
 
         return np.array(points), np.array(vectors_complex), np.array(F_involved)
     
-    def corner_field(self, singularities, indices, v_init, z_init):
-        Theta = self.compute_thetas(singularities=singularities, indices=indices)
+    def corner_field(self, singularities, indices, v_init, z_init, non_contractible_indices=None):
+        Theta = self.compute_thetas(singularities=singularities, indices=indices, non_contractible_indices=non_contractible_indices)
         
         U = self.reconstruct_corners_from_thetas(Theta, v_init, z_init)
         

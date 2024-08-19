@@ -1,7 +1,7 @@
 import numpy as np
 import polyscope as ps
 from Functions.Auxiliary import *
-from Functions.Mesh import Triangle_mesh
+from Functions.Mesh_backup import Triangle_mesh
 import os
 import polyscope.imgui as psim
 
@@ -12,33 +12,31 @@ np.set_printoptions(threshold=np.inf)
 
 if __name__ == '__main__':
     
-    V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
+    V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
     E = obtain_E(F)
 
     mesh = Triangle_mesh(V, F)
     
     mesh.initialise_field_processing()
     
-    singularities = np.array([
-        0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
-        0.6 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.2 * V[F[70, 2]],
-        V[F[205, 0]],
-        0.2 * V[F[205, 0]] + 0.2 * V[F[205, 1]] + 0.6 * V[F[205, 2]],
-        0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
-        0.6 * V[F[103, 0]] + 0.2 * V[F[103, 1]] + 0.2 * V[F[103, 2]],
-        (V[E[100, 0]] + V[E[100, 1]])/2,
-        0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
-        V[F[300, 0]],
-        0.2 * V[F[305, 0]] + 0.2 * V[F[305, 1]] + 0.6 * V[F[305, 2]],
-        0.2 * V[F[305, 0]] + 0.2 * V[F[305, 1]] + 0.6 * V[F[305, 2]],
-        0.2 * V[F[5, 0]] + 0.2 * V[F[5, 1]] + 0.6 * V[F[5, 2]]
-    ])
-    indices = [-1, 1, -1, 1, 1, 1, -1, -1, -1, 1, 1, 1]
     # singularities = np.array([
     #     0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]],
-    #     V[F[205, 0]]
+    #     0.6 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.2 * V[F[70, 2]],
+    #     V[F[205, 0]],
+    #     0.2 * V[F[205, 0]] + 0.2 * V[F[205, 1]] + 0.6 * V[F[205, 2]],
+    #     0.2 * V[F[100, 0]] + 0.2 * V[F[100, 1]] + 0.6 * V[F[100, 2]],
+    #     0.6 * V[F[103, 0]] + 0.2 * V[F[103, 1]] + 0.2 * V[F[103, 2]],
+    #     (V[E[100, 0]] + V[E[100, 1]])/2,
+    #     0.2 * V[F[0, 0]] + 0.2 * V[F[0, 1]] + 0.6 * V[F[0, 2]],
+    #     V[F[300, 0]],
+    #     0.2 * V[F[305, 0]] + 0.2 * V[F[305, 1]] + 0.6 * V[F[305, 2]],
+    #     0.2 * V[F[305, 0]] + 0.2 * V[F[305, 1]] + 0.6 * V[F[305, 2]],
+    #     0.2 * V[F[5, 0]] + 0.2 * V[F[5, 1]] + 0.6 * V[F[5, 2]]
     # ])
-    # indices = [1, 1]
+    # indices = [-1, 1, -1, 1, 1, 1, -1, -1, -1, 1, 1, 1]
+    singularities = np.array([
+    ])
+    indices = []
     
     v_init = 10
     z_init = 1
@@ -72,7 +70,7 @@ if __name__ == '__main__':
         ps.register_surface_mesh(f"F_over_pi{f}", mesh.V_subdivided[f], mesh.F_subdivided[f], enabled=True)
     
     
-    ps.register_point_cloud("singularity marker", singularities, enabled=True, radius=0.002)
+    # ps.register_point_cloud("singularity marker", singularities, enabled=True, radius=0.002)
     
     vectors_complex_unrot = vectors_complex.copy()
     beta = 1
