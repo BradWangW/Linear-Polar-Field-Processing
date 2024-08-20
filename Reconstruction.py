@@ -13,7 +13,7 @@ np.set_printoptions(threshold=np.inf)
 
 if __name__ == '__main__':
     
-    V, F = load_off_file(os.path.join('..', 'data', 'spherers.off'))
+    V, F = load_off_file(os.path.join('..', 'data', 'torus.off'))
     E = obtain_E(F)
 
     mesh = Triangle_mesh(V, F)
@@ -34,8 +34,8 @@ if __name__ == '__main__':
     # ])
     # indices = [-2, 2, -1, 1, -1, 1, -1, 1, -1, 1]
     singularities = np.array([
-        V[70], 
-        0.2 * V[F[70, 0]] + 0.2 * V[F[70, 1]] + 0.6 * V[F[70, 2]]
+        (V[E[100, 0]] + V[E[100, 1]])/2,
+        V[E[100, 0]]
     ])
     indices = [1, -1]
     # singularities = np.array([])
@@ -68,6 +68,9 @@ if __name__ == '__main__':
 
     ps_field = ps.register_point_cloud("Field_sample", posis, enabled=True, radius=0)
     ps_field.add_vector_quantity('Field', vectors, enabled=True, color=(0.03, 0.33, 0.77))
+    
+    # ps_field = ps.register_point_cloud("Normals of the faces", np.mean(V[F], axis=1), enabled=True, radius=0)
+    # ps_field.add_vector_quantity('Normals', mesh.normals, enabled=True)
     
     for i in range(len(mesh.E_non_contractible_cycles)):
         ps.register_point_cloud(f'non_contractible cycles {i}', mesh.V[np.array(mesh.E_non_contractible_cycles[i])[:, 0]], enabled=True)
@@ -148,7 +151,7 @@ if __name__ == '__main__':
         elif non_unit_length:
             ps_field.add_vector_quantity('Field', vectors, enabled=True, length=0.06)
         else:
-            ps_field.add_vector_quantity('Field', vectors, enabled=True)
+            ps_field.add_vector_quantity('Field', vectors/np.linalg.norm(vectors, axis=1)[:, None], enabled=True)
 
         psim.PopItemWidth()
 

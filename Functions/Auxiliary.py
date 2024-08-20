@@ -37,53 +37,6 @@ def obtain_E(F):
     
     return E
 
-def compute_cot_weights(V, E, F):
-    # Number of vertices and edges
-    n_edges = E.shape[0]
-    
-    # Initialize an array to hold the cotangent weights
-    cot_weights = np.zeros(n_edges)
-    
-    # Helper function to calculate the cotangent of the angle opposite to a given edge
-    def cotangent(a, b, c):
-        ba = V[b] - V[a]
-        ca = V[c] - V[a]
-        cosine_angle = np.dot(ba, ca) / (np.linalg.norm(ba) * np.linalg.norm(ca))
-        sine_angle = np.linalg.norm(np.cross(ba, ca)) / (np.linalg.norm(ba) * np.linalg.norm(ca))
-        return cosine_angle / sine_angle
-
-    # Create a dictionary to map edges to their corresponding cotangent weights
-    edge_cot_map = {}
-
-    for face in F:
-        # The three vertices of the face
-        i, j, k = face
-        
-        # Compute the cotangent weights for each angle in the triangle
-        cot_alpha_ij = cotangent(i, j, k)
-        cot_beta_ij = cotangent(j, k, i)
-        cot_gamma_ij = cotangent(k, i, j)
-
-        # Add these weights to the edges
-        edges = [(i, j), (j, k), (k, i)]
-        cots = [cot_gamma_ij, cot_alpha_ij, cot_beta_ij]
-        
-        for edge, cot in zip(edges, cots):
-            sorted_edge = tuple(sorted(edge))
-            if sorted_edge in edge_cot_map:
-                edge_cot_map[sorted_edge] += cot
-            else:
-                edge_cot_map[sorted_edge] = cot
-
-    # Populate the cotangent weights array
-    for idx, edge in enumerate(E):
-        sorted_edge = tuple(sorted(edge))
-        if sorted_edge in edge_cot_map:
-            cot_weights[idx] = edge_cot_map[sorted_edge] / 2.0  # divide by 2 as per the cotangent weight definition
-
-    return cot_weights
-
-
 def compute_V_boundary(F):
     # Build edge-to-face mapping
     E_to_F = defaultdict(list)

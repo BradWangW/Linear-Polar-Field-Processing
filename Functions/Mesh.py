@@ -4,10 +4,11 @@ from scipy.sparse import lil_matrix, eye, bmat, diags, vstack
 from Functions.Auxiliary import (accumarray, find_indices, is_in_face, compute_planes, 
                                  complex_projection, obtain_E, compute_V_boundary, 
                                  compute_unfolded_vertex, compute_barycentric_coordinates, 
-                                 compute_angle_defect, compute_cot_weights)
-from scipy.sparse.linalg import lsqr
+                                 compute_angle_defect)
+from scipy.sparse.linalg import lsqr, spsolve, spilu, LinearOperator
 import cvxopt
 import networkx as nx
+import random
 
 
 class Triangle_mesh():
@@ -22,10 +23,6 @@ class Triangle_mesh():
         self.V_boundary = compute_V_boundary(F)
         
         self.G_V = compute_angle_defect(V, F, self.V_boundary)
-        
-        print(np.sort(self.G_V)[:5], np.sort(self.G_V)[-5:])
-        
-        self.cot_weights = compute_cot_weights(V, self.E, F)
         
         self.genus = (2 - (V.shape[0] - self.E.shape[0] + F.shape[0])) / 2
         
@@ -88,6 +85,7 @@ class Triangle_mesh():
         
         # List to store non-contractible cycles
         cycles = []
+        G_H = []
 
         for cotree_edge in tqdm(E_co, 
                                 desc="Finding non-contractible cycles", 
@@ -96,8 +94,10 @@ class Triangle_mesh():
             # Add the cotree edge back to form a cycle
             T.add_edge(*cotree_edge)
             
+            cycle = nx.find_cycle(T, source=cotree_edge[0])
+            
             # Find the cycle created by adding this edge
-            cycles.append(nx.find_cycle(T, source=cotree_edge[0]))
+            cycles.append(cycle)
             
             # Remove the edge again to restore the tree
             T.remove_edge(*cotree_edge)
@@ -108,8 +108,8 @@ class Triangle_mesh():
         steps = [
             self.construct_extended_mesh,
             self.construct_d1_extended,
-            self.compute_homology_extended,
-            self.compute_face_pair_rotation
+            self.compute_face_pair_rotation,
+            self.compute_homology_extended
         ]
         for step in tqdm(steps, 
                          desc='Initialising field processing', 
@@ -309,10 +309,10 @@ class Triangle_mesh():
             for index, e in zip(indices, E_f):
                 # If the edge is aligned with the face, the orientation is positive
                 if (np.where(f == e[0])[0] == np.where(f == e[1])[0] - 1) or (f[-1] == e[0] and f[0] == e[1]):
-                    d1[len(self.F_f) + i, index] = 1
+                    d1[len(self.F_f) + i, index] = -1
                 # If the edge is opposite to the face, the orientation is negative
                 elif (np.where(f == e[0])[0] == np.where(f == e[1])[0] + 1) or (f[-1] == e[1] and f[0] == e[0]):
-                    d1[len(self.F_f) + i, index] = -1
+                    d1[len(self.F_f) + i, index] = 1
                 else:
                     raise ValueError(f'The edge {e} is not in the face {f}, or the edge face is wrongly defined.')
 
@@ -328,7 +328,57 @@ class Triangle_mesh():
             ] = 1
             
         self.d1 = d1
-    
+        
+    def compute_face_pair_rotation(self):
+        '''
+            Compute the rotation between the pair of faces sharing an edge.
+        '''
+        pair_rotations = np.zeros(self.E_comb.shape[0])
+        
+        # The ith element in F_e and E represent the same edge
+        for f_e in tqdm(self.F_e, 
+                        desc='Computing face pair rotations', 
+                        total=len(self.F_e), 
+                        leave=False):
+            # Recall each f_e is formed as v1 -> v2 -> v2 -> v1
+            # so that v1 -> v2 is a twin edge and v1 -> v1 is a combinatorial edge
+            e1_comb = np.all(np.isin(self.E_comb, f_e[[0, 3]]), axis=1)
+            e2_comb = np.all(np.isin(self.E_comb, f_e[[1, 2]]), axis=1)
+
+            vec_e = self.V_extended[f_e[1]] - self.V_extended[f_e[0]]
+            
+            f1_f = np.where(np.any(np.isin(self.F_f, f_e[0]), axis=1))[0]
+            f2_f = np.where(np.any(np.isin(self.F_f, f_e[3]), axis=1))[0]
+            
+            
+            B1, B2, normals = (self.B1[[f1_f, f2_f]].squeeze(), 
+                               self.B2[[f1_f, f2_f]].squeeze(), 
+                               self.normals[[f1_f, f2_f]].squeeze())
+            
+            U = complex_projection(B1, B2, normals, vec_e[None, :])
+            
+            rotation = np.angle(U[1] / U[0])
+            
+            # The rotation is positive if the edge is aligned with the order face1 -> face2
+            if np.all(self.E_comb[e1_comb] == f_e[[0, 3]]):
+                pair_rotations[e1_comb] = rotation
+            # The rotation is negative if the edge is opposite to the order, i.e. face2 -> face1
+            elif np.all(self.E_comb[e1_comb] == f_e[[3, 0]]):
+                pair_rotations[e1_comb] = -rotation
+            else:
+                raise ValueError(f'{self.E_comb[e1_comb]} and {f_e[[3, 0]]} do not match.')
+            
+            # The rotation is positive if the edge is aligned with the face
+            if np.all(self.E_comb[e2_comb] == f_e[[1, 2]]):
+                pair_rotations[e2_comb] = rotation
+            # The rotation is negative if the edge is opposite to the face
+            elif np.all(self.E_comb[e2_comb] == f_e[[2, 1]]):
+                pair_rotations[e2_comb] = -rotation
+            else:
+                raise ValueError(f'{self.E_comb[e2_comb]} and {f_e[[1, 2]]} do not match.')
+            
+        self.pair_rotations = pair_rotations
+        
     def compute_homology_extended(self):
         '''
             Compute the homology basis for the extended mesh.
@@ -385,66 +435,19 @@ class Triangle_mesh():
                 if start < end:
                     for k in range(start, end):
                         H[i, self.F_v_map_E_comb[e[1]][k] + len(self.E_twin)] = 1
+                        
+                        # G_H[i] += self.pair_rotations[self.F_v_map_E_comb[e[1]][k]]
+                                                
                 elif end < start:
                     for k in range(end, start):
                         H[i, self.F_v_map_E_comb[e[1]][k] + len(self.E_twin)] = -1
                         
-                G_H[i] += self.G_V[e[0]]
+                        # G_H[i] += self.pair_rotations[self.F_v_map_E_comb[e[1]][k]]
                 
         self.H = H
         self.G_H = G_H
-        
-    def compute_face_pair_rotation(self):
-        '''
-            Compute the rotation between the pair of faces sharing an edge.
-        '''
-        pair_rotations = np.zeros(self.E_comb.shape[0])
-        
-        # The ith element in F_e and E represent the same edge
-        for f_e in tqdm(self.F_e, 
-                        desc='Computing face pair rotations', 
-                        total=len(self.F_e), 
-                        leave=False):
-            # Recall each f_e is formed as v1 -> v2 -> v2 -> v1
-            # so that v1 -> v2 is a twin edge and v1 -> v1 is a combinatorial edge
-            e1_comb = np.all(np.isin(self.E_comb, f_e[[0, 3]]), axis=1)
-            e2_comb = np.all(np.isin(self.E_comb, f_e[[1, 2]]), axis=1)
-
-            vec_e = self.V_extended[f_e[1]] - self.V_extended[f_e[0]]
             
-            f1_f = np.where(np.any(np.isin(self.F_f, f_e[0]), axis=1))[0]
-            f2_f = np.where(np.any(np.isin(self.F_f, f_e[3]), axis=1))[0]
-            
-            
-            B1, B2, normals = (self.B1[[f1_f, f2_f]].squeeze(), 
-                               self.B2[[f1_f, f2_f]].squeeze(), 
-                               self.normals[[f1_f, f2_f]].squeeze())
-            
-            U = complex_projection(B1, B2, normals, vec_e[None, :])
-            
-            rotation = np.angle(np.conjugate(U[0]) / np.conjugate(U[1]))
-            
-            # The rotation is positive if the edge is aligned with the order face1 -> face2
-            if np.all(self.E_comb[e1_comb] == f_e[[0, 3]]):
-                pair_rotations[e1_comb] = rotation
-            # The rotation is negative if the edge is opposite to the order, i.e. face2 -> face1
-            elif np.all(self.E_comb[e1_comb] == f_e[[3, 0]]):
-                pair_rotations[e1_comb] = -rotation
-            else:
-                raise ValueError(f'{self.E_comb[e1_comb]} and {f_e[[3, 0]]} do not match.')
-            
-            # The rotation is positive if the edge is aligned with the face
-            if np.all(self.E_comb[e2_comb] == f_e[[1, 2]]):
-                pair_rotations[e2_comb] = rotation
-            # The rotation is negative if the edge is opposite to the face
-            elif np.all(self.E_comb[e2_comb] == f_e[[2, 1]]):
-                pair_rotations[e2_comb] = -rotation
-            else:
-                raise ValueError(f'{self.E_comb[e2_comb]} and {f_e[[1, 2]]} do not match.')
-            
-        self.pair_rotations = pair_rotations
-            
-    def compute_thetas(self, singularities=None, indices=None, weight_comb=1, non_contractible_indices=None):
+    def compute_thetas(self, singularities=None, indices=None, weight_comb=10, non_contractible_indices=None):
         '''
             Compute the set of thetas for each face singularity 
             by constrained optimisation using the KKT conditions.
@@ -458,6 +461,7 @@ class Triangle_mesh():
         self.I_F = np.zeros(len(self.F_f) + len(self.F_e) + len(self.F_v))
         
         Theta = np.zeros(len(self.E_extended))
+        
         self.F_singular = []
         self.singularities_f = {}
         self.indices_f = {}
@@ -592,8 +596,7 @@ class Triangle_mesh():
             elif in_F_f is not False:
                 # Obtain the neighbour faces of the face containing the singularity
                 # and the unfolded locations of the singularity on those faces
-                for _ in range(abs(index)):
-                    deal_singularity(in_F_f, singularity, np.sign(index), in_face=True)
+                deal_singularity(in_F_f, singularity, index, in_face=True)
                 
                 # for i in range(3):
                 #     common_edge = np.stack([self.F[in_F_f], np.roll(self.F[in_F_f], -1)], axis=1)[i]
@@ -633,24 +636,22 @@ class Triangle_mesh():
         
         # Q is the weight matrix, whose diagonal is the weights of the edges
         # Q = diags([weights_E], [0])
-        Q = eye(np.sum(mask_removed_e), format='lil')
+        Q = eye(len(self.E_extended), format='lil')
         Q[len(self.E_twin):, len(self.E_twin):] *= weight_comb
-        Q = Q.tocoo()
+        Q = Q[mask_removed_e][:, mask_removed_e].tocoo()
         c = np.zeros(np.sum(mask_removed_e))
 
         # Quantities for quadratic programming dependent on the singularities
-        E = vstack([
-            self.d1[mask_removed_f][:, mask_removed_e],
-            self.H[:, mask_removed_e]
-        ], format='coo')
-        # E = self.d1.tocsc()
-        
-        print(E.shape)
-
-        d = np.concatenate([
-            2 * np.pi * self.I_F[mask_removed_f] - self.G_F[mask_removed_f] - self.d1[mask_removed_f] @ Theta, 
-            2 * np.pi * np.array(non_contractible_indices) - self.G_H - self.H @ Theta
-        ])
+        # E = vstack([
+        #     self.d1[mask_removed_f][:, mask_removed_e],
+        #     self.H[:, mask_removed_e]
+        # ], format='coo')
+        # d = np.concatenate([
+        #     - self.G_F[mask_removed_f] - self.d1[mask_removed_f] @ Theta, 
+        #     2 * np.pi * np.array(non_contractible_indices) - self.G_H - self.H @ Theta
+        # ])
+        E = self.d1[mask_removed_f][:, mask_removed_e]
+        d = - self.G_F[mask_removed_f] - self.d1[mask_removed_f] @ Theta
 
         # Define the system to solve the quadratic programming problem
         KKT_lhs = bmat([
@@ -658,12 +659,13 @@ class Triangle_mesh():
             [E, np.zeros((E.shape[0], E.shape[0]))]
         ], format='coo')
         KKT_rhs = np.concatenate([-c, d])
-        print('Finished constructing the KKT system.')
+        
         # Solve the quadratic programming problem
-        print('Solving for the thetas...')
         solution, _, itn, r1norm = lsqr(KKT_lhs, KKT_rhs)[:4]
         
         Theta[mask_removed_e] = solution[:np.sum(mask_removed_e)]
+        
+        print('Number of rotations > pi/2: ', np.sum(np.abs(Theta) > np.pi/2))
         
         print(f'Theta computation iteration and residual: {itn}, {r1norm}.')
         
@@ -689,54 +691,19 @@ class Triangle_mesh():
         '''
         Theta_complete = Theta.copy()
         Theta_complete[len(self.E_twin):] += self.pair_rotations
-        
-        
-        E_extended_tuple = [tuple(e) for e in self.E_extended]
-        
-        # Create a graph from the mesh edges
-        G = nx.Graph()
-        G.add_edges_from(E_extended_tuple)
-        
-        T = nx.minimum_spanning_tree(G)
-        T_arr = np.array(T.edges())
-        
-        E_extended_included = np.any((self.E_extended[:, None] == T_arr).all(-1) | 
-                                     (self.E_extended[:, None] == T_arr[:, ::-1]).all(-1), axis=1)
-        E_extended_extracted = self.E_extended[E_extended_included]
-        num_included = np.sum(E_extended_included)
-        
-        R = np.zeros(len(self.V_extended))
-        R[v_init] = np.abs(z_init)
 
-        lhs_U = lil_matrix((num_included + 1, len(self.V_extended)), dtype=complex)
-        lhs_U[np.arange(num_included), E_extended_extracted[:, 0]] = -1
-        lhs_U[np.arange(num_included), E_extended_extracted[:, 1]] = 1
-        lhs_U[num_included, v_init] = 1
-        print(Theta_complete[E_extended_included].shape)
-        rhs_U = np.concatenate([
-            Theta_complete[E_extended_included],
-            [np.angle(z_init)]
-        ])
+        lhs = lil_matrix((len(self.E_extended)+1, len(self.V_extended)), dtype=complex)
+        lhs[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = np.exp(1j * Theta_complete)
+        lhs[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
+        lhs[-1, v_init] = 1
         
-        U, _, itn, r1norm = lsqr(lhs_U, rhs_U)[:4]
+        rhs = np.zeros(len(self.E_extended)+1, dtype=complex)
+        rhs[-1] = z_init
+        
+        U, _, itn, r1norm = lsqr(lhs, rhs)[:4]
         
         print(f'Corner argument reconstruction iterations and residuals',
               itn, r1norm)
-
-        lhs_R = lil_matrix((len(self.E_extended) + 1, len(self.V_extended)))
-        lhs_R[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = 1
-        lhs_R[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
-        lhs_R[-1, v_init] = 1
-        
-        rhs_R = np.zeros(len(self.E_extended)+1)
-        rhs_R[-1] = np.abs(z_init)
-        
-        R, _, itn, r1norm = lsqr(lhs_R, rhs_R)[:4]
-        
-        print(f'Corner radius reconstruction iterations and residuals',
-              itn, r1norm)
-        
-        U = np.exp(R + (1j * U))
         
         return U
     
@@ -856,16 +823,27 @@ class Triangle_mesh():
                     )[0, 0] for singularity in self.singularities_f[i]
                 ])
                 
-                counter = 0
+                Uf_sub = Uf/np.sum(np.abs(self.indices_f[i]))
+                
+                proper_second_point = False
                 for zf, uf in zip(Zf, Uf):
                     if zf not in Zc:
                         zj = zf
-                        uj = np.exp(1j * (np.angle(uf) / np.sum(np.abs(self.indices_f[i])))) * np.abs(uf)
+                        uj = uf ** (1/np.sum(np.abs(self.indices_f[i])))
+                        proper_second_point = True
                         break
-                    counter += 1
-                if counter == 3:
-                    raise ValueError('The face cannot have all of the three corners as singularities.')
                     
+                while not proper_second_point:
+                    x = random.random()
+                    y = random.random() * x
+                    
+                    zf = x * Zf[0] + y * Zf[1] + (1 - x - y) * Zf[2]
+                    
+                    if zf not in Zc:
+                        zj = zf
+                        uj = (x * Uf[0] + y * Uf[1] + (1 - x - y) * Uf[2]) ** (1/np.sum(np.abs(self.indices_f[i])))
+                        proper_second_point = True
+                
                 # Divide the argument of the firsr corner by the number of singularities on that face
                 # so that the first corner, after the multiplicative superposition,
                 # aligns with the first corner of the face
