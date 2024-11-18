@@ -3,12 +3,13 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 
 # Define the complex vector field function
-def f(z, a, r, t):
-    b = a * r * np.exp(1j * t)
+def f(z, r, t):
+    a = r * np.exp(1j * t)
+    b = 1 - a
     return a * z + b * np.conj(z)
 
 # Generate the grid of points
-num_directions = 30  # Number of polar axes directions
+num_directions = 50  # Number of polar axes directions
 num_points = 5  # Number of points per axis
 
 # Generate points in polar coordinates
@@ -27,13 +28,12 @@ Y = np.array(Y)
 Z = X + 1j * Y
 
 # Parameters
-a = 1 + 1j  # Example complex number for a
-r = 1.0
-t = 0.0
+r = 1  # Example complex number for a
+t = 0
 
 # Normalise the field
-F = f(Z, a, r, t)
-F = F / np.abs(F)
+F = f(Z, r, t)
+# F = F / np.abs(F)
 
 # Calculate the initial vector field
 U = np.real(F)
@@ -61,8 +61,8 @@ def update(val):
     r = slider_r.val
     t = slider_t.val
     
-    F = f(Z, a, r, t)
-    F = F / np.abs(F)
+    F = f(Z, r, t)
+    # F = F / np.abs(F)
     
     U = np.real(F)
     V = np.imag(F)

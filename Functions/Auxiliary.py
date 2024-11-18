@@ -2,6 +2,8 @@ import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
 import networkx as nx
+import sys
+import gc
 
 def load_off_file(file_path):
     with open(file_path, 'r') as file:
@@ -26,14 +28,16 @@ def accumarray(indices, values):
 
     return output
         
-def obtain_E(F):
+def obtain_E(F, unique=True):
     '''
     Obtain the edge list from the face list.
     '''
     E = np.concatenate([
         F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]
     ])
-    E = np.unique(np.sort(E, axis=1), axis=0)
+    
+    if unique:
+        E = np.unique(np.sort(E, axis=1), axis=0)
     
     return E
 
@@ -234,17 +238,29 @@ def find_indices(A, B):
     '''
     Find the indices of rows in B as they appear in A
     '''
-    # Convert A and B to tuples for easy comparison
-    A_tuples = [tuple(row) for row in A]
-    B_tuples = [tuple(row) for row in B]
-
-    # Create a dictionary to map rows in A to their indices
-    A_dict = {row: idx for idx, row in enumerate(A_tuples)}
-
+    
+    # Create a dictionary to map each row of A to its index
+    A_dict = {tuple(row): idx for idx, row in enumerate(A)}
+    
     # Find the indices of rows in B as they appear in A
-    indices = [A_dict[row] for row in B_tuples]
-
+    indices = [A_dict.get(tuple(row), -1) for row in B]
+    
+    # Check if all rows in B were found in A
+    if -1 in indices:
+        raise ValueError("Some rows in B do not exist in A")
+    
     return np.array(indices)
+
+def get_memory_usage():
+    """
+    Calculate the total memory usage of all variables.
+    """
+    # Collect all objects and compute their sizes
+    total_size = sum(sys.getsizeof(obj) for obj in gc.get_objects())
+
+    print(f"Total memory usage: {total_size / (1024 ** 2):.2f} MB")  # Convert to MB
+    return total_size
+
 
 def compute_barycentric_coordinates(v1, v2, v3, posi):
     v2v1 = v2 - v1
@@ -374,3 +390,53 @@ def compute_unfolded_vertex(a, b, c, d):
             furthest_point = d_prime
     
     return furthest_point
+
+from scipy.sparse import csr_matrix
+from scipy.sparse.linalg import lsqr
+
+def solve_real_modular_system(A, b, c, tol=1e-6, max_iter=100):
+    """
+    Solve A x = b (mod c) in the real domain, where c is a real constant.
+    
+    Args:
+        A (csr_matrix): Sparse matrix (m x n).
+        b (array-like): Right-hand side vector (length m).
+        c (float): Modulus (real value, e.g., 2*pi).
+        tol (float): Tolerance for convergence.
+        max_iter (int): Maximum iterations for adjusting integer offsets.
+    
+    Returns:
+        x (numpy.ndarray): Solution vector modulo c.
+    """
+    # Ensure inputs are arrays
+    b = np.array(b)
+    m, n = A.shape
+    
+    b = b.astype(float)  # Ensure b is float
+    c = float(c)         # Ensure c is float
+    
+    # Normalize b modulo c
+    b_mod = np.remainder(b, c)
+    
+    # Initial guess for x
+    x = np.zeros(n)
+    
+    for _ in range(max_iter):
+        # Compute current residual
+        residual = (A @ x - b_mod).astype(float)
+        
+        # Check if residual is close to zero modulo c
+        if np.all(np.abs(np.remainder(residual, c)) < tol):
+            return np.mod(x, c)  # Return x normalized to [0, c)
+        
+        # Adjust the integer offsets k
+        k = np.round(residual / c).astype(int)
+        
+        # Update b_mod to account for the offset
+        b_mod -= k * c
+
+        # Solve the updated system A x = b_mod
+        x = lsqr(A, b_mod)[0]  # Least squares solver for sparse matrices
+
+    raise ValueError("Solution did not converge within the maximum number of iterations")
+
