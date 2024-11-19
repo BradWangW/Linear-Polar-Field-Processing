@@ -1,6 +1,6 @@
 import polyscope as ps
 from Functions.Auxiliary import *
-from Functions.Mesh_noanglefit import Triangle_mesh
+from Functions.Mesh_noenforceangle import Triangle_mesh
 import os
 
 if __name__ == '__main__':
