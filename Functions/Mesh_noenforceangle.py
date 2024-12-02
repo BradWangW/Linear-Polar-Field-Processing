@@ -142,7 +142,7 @@ class Triangle_mesh():
                 self.E_twin[i * 3 + j] = [f_f[j], f_f[k]]
                 self.d1[i, i * 3 + j] = 1
                 
-                self.E_twin_dict[tuple([f_f[j], f_f[k]])] = i * 3 + j
+                self.E_dict[tuple([f_f[j], f_f[k]])] = i * 3 + j
                 
             vec0 = self.V[f[1]] - self.V[f[0]]
             vec1 = self.V[f[2]] - self.V[f[1]]
@@ -205,18 +205,21 @@ class Triangle_mesh():
                     [edges[1][1], edges[0][0]]
                 ]
                 
+                self.E_dict[tuple([edges[0][1], edges[1][0]])] = len(self.E_comb) - 2 + len(self.E_twin)
+                self.E_dict[tuple([edges[1][1], edges[0][0]])] = len(self.E_comb) - 1 + len(self.E_twin)
+                
                 f = np.where(np.any(np.isin(self.F_f, edges[1][0]), axis=1))[0]
                 g = np.where(np.any(np.isin(self.F_f, edges[0][0]), axis=1))[0]
                 
                 other_v_f = np.setdiff1d(self.F_f[f], [edges[1][1], edges[1][0]])[0]
                 other_v_g = np.setdiff1d(self.F_f[g], [edges[0][0], edges[0][1]])[0]
                 
-                e_i_j, e_j_k, e_kf_if, e_k_l, e_l_i, e_ig_kg = self.E_twin_dict[tuple([edges[1][1], other_v_f])],\
-                    self.E_twin_dict[tuple([other_v_f, edges[1][0]])],\
-                    self.E_twin_dict[tuple([edges[1][0], edges[1][1]])],\
-                    self.E_twin_dict[tuple([edges[0][1], other_v_g])],\
-                    self.E_twin_dict[tuple([other_v_g, edges[0][0]])],\
-                    self.E_twin_dict[tuple([edges[0][0], edges[0][1]])]
+                e_i_j, e_j_k, e_kf_if, e_k_l, e_l_i, e_ig_kg = self.E_dict[tuple([edges[1][1], other_v_f])],\
+                    self.E_dict[tuple([other_v_f, edges[1][0]])],\
+                    self.E_dict[tuple([edges[1][0], edges[1][1]])],\
+                    self.E_dict[tuple([edges[0][1], other_v_g])],\
+                    self.E_dict[tuple([other_v_g, edges[0][0]])],\
+                    self.E_dict[tuple([edges[0][0], edges[0][1]])]
                     
                 e_if_ig, e_kg_kf = len(self.E_twin) + len(self.E_comb) - 1, len(self.E_twin) + len(self.E_comb) - 2
             
@@ -385,10 +388,34 @@ class Triangle_mesh():
         ], format='csc')
         self.M_Theta_KKT_punishing_comb = splu(self.A_Theta_KKT_punishing_comb + 1e-8 * eye(self.A_Theta_KKT_identity_metric.shape[0], format='csc'))
         
+        # Corner phase computation
+        G_extended = nx.Graph()
+        G_extended.add_edges_from(self.E_extended)
+        tree_extended = nx.minimum_spanning_tree(G_extended)
+        E_tree = np.array(tree_extended.edges())
+        self.mask_E_tree = np.zeros(len(E_tree), dtype=int)
+        
+        for i, e_tree in enumerate(E_tree):
+            if tuple(e_tree) in self.E_dict:
+                self.mask_E_tree[i] = self.E_dict[tuple(e_tree)]
+                E_tree[i] = self.E_extended[self.mask_E_tree[i]]
+            elif tuple(e_tree[::-1]) in self.E_dict:
+                self.mask_E_tree[i] = self.E_dict[tuple(e_tree[::-1])]
+                E_tree[i] = self.E_extended[self.mask_E_tree[i]]
+        
+        self.A_Corner_phase = lil_matrix((len(E_tree) + 1, len(self.V_extended)))
+        self.A_Corner_phase[np.arange(len(E_tree)), E_tree[:, 0]] = -1
+        self.A_Corner_phase[np.arange(len(E_tree)), E_tree[:, 1]] = 1
+        self.A_Corner_phase[-1, 0] = 1
+        
+        self.ATA_Corner_phase = self.A_Corner_phase.T @ self.A_Corner_phase
+        
+        self.lu_Corner_phase = splu(self.ATA_Corner_phase.tocsc() + 1e-8 * eye(self.ATA_Corner_phase.shape[0], format='csc'))
+        
         # Corner scale computation
         self.A_Corner_scale = lil_matrix((len(self.E_extended) + 1, len(self.V_extended)))
-        self.A_Corner_scale[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = 1
-        self.A_Corner_scale[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
+        self.A_Corner_scale[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = -1
+        self.A_Corner_scale[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = 1
         self.A_Corner_scale[-1, 0] = 1
         
         A_Corner_scale_augmented = bmat([
@@ -437,7 +464,7 @@ class Triangle_mesh():
         self.d1 = lil_matrix((len(self.F) + len(self.E) + len(self.V), 4 * len(self.E)), dtype=float)
         self.pair_rotations = []
         self.V_map = {v:[] for v in range(self.V.shape[0])}
-        self.E_twin_dict = {}
+        self.E_dict = {}
         self.d_G_complete = lil_matrix((len(self.F) + len(self.E), len(self.E) * 4), dtype=float)
         self.Area_inv = lil_matrix((len(self.F) + len(self.E), len(self.F) + len(self.E)), dtype=float)
         
@@ -453,10 +480,9 @@ class Triangle_mesh():
             step()
         
         self.I_F_pre = np.zeros(len(self.F_f) + len(self.F_e) + len(self.F_v))
-        self.Corner_arg_pre = np.zeros(len(self.V_extended))        
+        self.Corner_phase_pre = np.zeros(len(self.V_extended))        
         self.Corner_scale_pre = np.zeros(len(self.V_extended))
         
-        self.Corner_arg_pre = None
         self.Corner_scale_harmonic = self.lu_Corner_scale_augmented.solve(
             np.concatenate([
                 np.append(np.zeros(len(self.E_extended), dtype=float), 1), 
@@ -589,75 +615,31 @@ class Triangle_mesh():
             else:
                 raise ValueError('The metric is not recognised.')
             
-            Theta = solution[:len(self.E_extended)]
+            self.Theta = solution[:len(self.E_extended)]
             
-            self.Theta = Theta.copy()
+            self.Theta[len(self.E_twin):] += self.pair_rotations
             
-            Theta[len(self.E_twin):] += self.pair_rotations
-            
-            self.A_Corner_arg = lil_matrix((len(self.E_extended) + 1, len(self.V_extended)), dtype=complex)
-            self.A_Corner_arg[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = np.exp(1j * Theta)
-            self.A_Corner_arg[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
-            self.A_Corner_arg[-1, np.where(self.mask_removed_v)[0][0]] = 1
+            # self.A_Corner_phase = lil_matrix((len(self.E_extended) + 1, len(self.V_extended)), dtype=complex)
+            # self.A_Corner_phase[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = np.exp(1j * self.Theta)
+            # self.A_Corner_phase[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
+            # self.A_Corner_phase[-1, np.where(self.mask_removed_v)[0][0]] = 1
 
-            M_inv = 1 / (self.A_Corner_arg.T @ self.A_Corner_arg).diagonal()
-            self.M_Corner_arg = LinearOperator((self.A_Corner_arg.shape[1], self.A_Corner_arg.shape[1]), matvec=lambda x: M_inv * x)
+            # M_inv = 1 / (self.A_Corner_phase.T @ self.A_Corner_phase).diagonal()
+            # self.M_Corner_phase = LinearOperator((self.A_Corner_phase.shape[1], self.A_Corner_phase.shape[1]), matvec=lambda x: M_inv * x)
             
-    def reconstruct_Corner_arg(self, z_init=1):
-        def gradient_descent(A, b, x0, learning_rate=0.01, tol=1e-3, max_iter=100):
-            """
-            Gradient Descent to solve A^T A x = A^T b.
-            A: Input matrix.
-            b: Right-hand side vector.
-            x0: Initial guess for the solution.
-            learning_rate: Step size for gradient descent.
-            tol: Tolerance for convergence.
-            max_iter: Maximum number of iterations.
-            """
-            x = x0
-            AtA = A.T @ A
-            Atb = A.T @ b
-            loss = 999999
-            loss_pre = 999999
-            descending = 0
-            
-            for k in range(max_iter):
-                loss = np.linalg.norm(A @ x - b)
-                gradient = AtA @ x - Atb
-                x_new = x - learning_rate * gradient
-                
-                if loss > loss_pre:
-                    descending += 1
-
-                # Check for convergence
-                if np.linalg.norm(x_new - x) < tol:
-                    print(f"Converged in {k} iterations.")
-                    return x_new
-
-                x = x_new
-                loss_pre = loss
-
-            print("Warning: Gradient Descent did not converge.")
-            print(f"Loss decreased {descending} times.")
-            return x
-        
+    def reconstruct_Corner_phase(self, z_init=1):
         if self.metric_pre != self.metric or np.any(self.I_F != self.I_F_pre) or np.all(self.I_F == 0):
-            b = np.append(np.zeros(len(self.E_extended), dtype=float), z_init)
+            b = np.append(self.Theta[self.mask_E_tree], np.angle(z_init))
+            self.Corner_phase = self.lu_Corner_phase.solve(self.A_Corner_phase.T @ b)
             
-            self.Corner_arg = np.angle(lsqr(
-                self.A_Corner_arg, b, x0=self.Corner_arg_pre, atol=1e-3, btol=1e-3
-                )[0])
-            # if self.Corner_arg_pre is None:
-            #     self.Corner_arg = np.angle(lsqr(
-            #         self.A_Corner_arg, b
-            #         )[0])
-            # else:
-            #     self.Corner_arg = np.angle(
-            #         gradient_descent(self.A_Corner_arg, b,
-            #                          x0=self.Corner_arg_pre)
-            #     )
+            # b = np.append(np.zeros(len(self.E_extended)), z_init/np.abs(z_init))
+            # self.Corner_phase = lsqr(
+            #     self.A_Corner_phase, b, x0=self.Corner_phase_pre, atol=1e-6, btol=1e-6
+            #     )[0]
             
-            self.Corner_arg_pre = np.exp(1j * self.Corner_arg)
+            self.Corner_phase_pre = self.Corner_phase.copy()
+            
+            # self.Corner_phase = np.angle(self.Corner_phase)
             
             self.metric_pre = self.metric
             
@@ -727,8 +709,8 @@ class Triangle_mesh():
             z1_relative = np.abs(z1) * np.exp(1j * (np.angle(z1) - np.angle(z0)))
             z2_relative = np.abs(z2) * np.exp(1j * (np.angle(z2) - np.angle(z0)))
 
-            theta_01 = self.Corner_arg[v1] - self.Corner_arg[v0]
-            theta_02 = self.Corner_arg[v2] - self.Corner_arg[v0]
+            theta_01 = self.Corner_phase[v1] - self.Corner_phase[v0]
+            theta_02 = self.Corner_phase[v2] - self.Corner_phase[v0]
             
             A = np.array([
                 [1, np.tan(theta_01)],
@@ -749,11 +731,61 @@ class Triangle_mesh():
             for edge in [edge01, edge12, edge20]:
                 v_start, v_end = self.E_twin[edge]
                 if x0[v_start] > x0[v_end]:
-                    A_Corner_scale[edge, v_end] = -x0[v_start]/x0[v_end]
+                    A_Corner_scale[edge, v_end] = -10 * x0[v_start]/x0[v_end]
+                    A_Corner_scale[edge, v_start] = 10
                 else:
-                    A_Corner_scale[edge, v_start] = x0[v_end]/x0[v_start]
+                    A_Corner_scale[edge, v_end] = -10
+                    A_Corner_scale[edge, v_start] = 10 * x0[v_end]/x0[v_start]
                     
-            rank_U += 3
+            rank_U += 6
+            
+            # def reconstruct_singularity(z0, z1, z2, f0, f1, f2):
+            #     A = np.array([
+            #         [z0.real, -z0.imag, z0.real, z0.imag, 1, 0],
+            #         [z0.imag, z0.real, -z0.imag, z0.real, 0, 1],
+            #         [z1.real, -z1.imag, z1.real, z1.imag, 1, 0],
+            #         [z1.imag, z1.real, -z1.imag, z1.real, 0, 1],
+            #         [z2.real, -z2.imag, z2.real, z2.imag, 1, 0],
+            #         [z2.imag, z2.real, -z2.imag, z2.real, 0, 1]
+            #     ], dtype=float)
+                
+            #     b = np.array([
+            #         f0.real, f0.imag, f1.real, f1.imag, f2.real, f2.imag
+            #     ], dtype=float)
+                
+            #     solution = np.linalg.solve(A, b)
+                
+            #     a = solution[0] + 1j * solution[1]
+            #     b = solution[2] + 1j * solution[3]
+            #     c = solution[4] + 1j * solution[5]
+                
+            #     singularity = (b * np.conj(c) - c * np.conj(a)) / (a * np.conj(a) - b * np.conj(b))
+                
+            #     return singularity
+
+            # z_singular = complex_projection(
+            #     self.B1[f][None, :],
+            #     self.B2[f][None, :],
+            #     self.normals[f][None, :],
+            #     (singularity - self.V_extended[v0])[None, :]
+            # )[0]
+            
+            # z0, z1, z2 = complex_projection(
+            #     self.B1[f][None, :],
+            #     self.B2[f][None, :],
+            #     self.normals[f][None, :],
+            #     self.V_extended[self.F_f[f]] - self.V_extended[v0]
+            # )[0]
+            
+            # f0 = x0[v0] + 0j
+            # f1 = x0[v1] * np.exp(1j * theta_01)
+            # f2 = x0[v2] * np.exp(1j * theta_02)
+            
+            # z_singular_reconstructed = reconstruct_singularity(z0, z1, z2, f0, f1, f2)
+            
+            # f_test = f
+            
+            # print(z_singular, z_singular_reconstructed)
 
         # Edge singularity
         for singularity, f in tqdm(zip(self.singularities[self.F_extended_singular >= len(self.F_f)], 
@@ -789,50 +821,59 @@ class Triangle_mesh():
                 vec1 = self.V_extended[self.E_twin[edge0, 1]] - singularity
                 alpha = np.linalg.norm(vec1) / (np.linalg.norm(vec0) + np.linalg.norm(vec1))
                 
-                arg_l = [self.Corner_arg[self.E_twin[edge0, 0]], self.Corner_arg[self.E_twin[edge1, 0]] - pair_rotation01 + np.pi]
-                arg_r = [self.Corner_arg[self.E_twin[edge0, 1]], self.Corner_arg[self.E_twin[edge1, 1]] - pair_rotation01 + np.pi]
+                phase_l = [self.Corner_phase[self.E_twin[edge0, 0]], self.Corner_phase[self.E_twin[edge1, 0]] - pair_rotation01 + np.pi]
+                phase_r = [self.Corner_phase[self.E_twin[edge0, 1]], self.Corner_phase[self.E_twin[edge1, 1]] - pair_rotation01 + np.pi]
                 
-                arg_l_used = arg_l[np.argmin([angle_difference(np.exp(1j * arg), np.exp(1j * arg_r[0])) for arg in arg_l])] % (2 * np.pi)
-                arg_r_used = arg_r[np.argmin([angle_difference(np.exp(1j * arg), np.exp(1j * arg_l[0])) for arg in arg_r])] % (2 * np.pi)
+                phase_l_used = phase_l[np.argmin([angle_difference(np.exp(1j * arg), np.exp(1j * phase_r[0])) for arg in phase_l])] % (2 * np.pi)
+                phase_r_used = phase_r[np.argmin([angle_difference(np.exp(1j * arg), np.exp(1j * phase_l[0])) for arg in phase_r])] % (2 * np.pi)
                 
-                if abs(arg_l_used - arg_r_used) > np.pi:
-                    if arg_l_used > arg_r_used:
-                        arg_l_used -= 2 * np.pi
+                if abs(phase_l_used - phase_r_used) > np.pi:
+                    if phase_l_used > phase_r_used:
+                        phase_l_used -= 2 * np.pi
                     else:
-                        arg_l_used += 2 * np.pi
+                        phase_l_used += 2 * np.pi
                 
-                arg_singular0 = (arg_r_used + arg_l_used)/2
-                arg_singular1 = arg_singular0 + pair_rotation01 + np.pi
+                phase_singular0 = (phase_r_used + phase_l_used)/2
+                phase_singular1 = phase_singular0 + pair_rotation01 + np.pi
                 
                 if alpha > 1/2:
-                    A_Corner_scale[edge0, self.E_twin[edge0, 0]] = (alpha/(1-alpha)) * \
-                        (np.tan(arg_singular0) * np.cos(self.Corner_arg[self.E_twin[edge0, 0]]) - np.sin(self.Corner_arg[self.E_twin[edge0, 0]])) /\
-                            (np.sin(self.Corner_arg[self.E_twin[edge0, 1]]) - np.tan(arg_singular0) * np.cos(self.Corner_arg[self.E_twin[edge0, 1]]))
-                    A_Corner_scale[edge1, self.E_twin[edge1, 1]] = -(alpha/(1-alpha)) * \
-                        (np.tan(arg_singular1) * np.cos(self.Corner_arg[self.E_twin[edge1, 1]]) - np.sin(self.Corner_arg[self.E_twin[edge1, 1]])) /\
-                            (np.sin(self.Corner_arg[self.E_twin[edge1, 0]]) - np.tan(arg_singular1) * np.cos(self.Corner_arg[self.E_twin[edge1, 0]]))
+                    A_Corner_scale[edge0, self.E_twin[edge0, 0]] = 10 * (alpha/(1-alpha)) * \
+                        (np.tan(phase_singular0) * np.cos(self.Corner_phase[self.E_twin[edge0, 0]]) - np.sin(self.Corner_phase[self.E_twin[edge0, 0]])) /\
+                            (np.sin(self.Corner_phase[self.E_twin[edge0, 1]]) - np.tan(phase_singular0) * np.cos(self.Corner_phase[self.E_twin[edge0, 1]]))
+                    A_Corner_scale[edge0, self.E_twin[edge0, 1]] = -10
+                    
+                    A_Corner_scale[edge1, self.E_twin[edge1, 1]] = -10 * (alpha/(1-alpha)) * \
+                        (np.tan(phase_singular1) * np.cos(self.Corner_phase[self.E_twin[edge1, 1]]) - np.sin(self.Corner_phase[self.E_twin[edge1, 1]])) /\
+                            (np.sin(self.Corner_phase[self.E_twin[edge1, 0]]) - np.tan(phase_singular1) * np.cos(self.Corner_phase[self.E_twin[edge1, 0]]))
+                    A_Corner_scale[edge1, self.E_twin[edge1, 0]] = 10
                             
                 else:
-                    A_Corner_scale[edge0, self.E_twin[edge0, 1]] = -((1-alpha)/alpha) * \
-                        (np.tan(arg_singular0) * np.cos(self.Corner_arg[self.E_twin[edge0, 1]]) - np.sin(self.Corner_arg[self.E_twin[edge0, 1]])) /\
-                            (np.sin(self.Corner_arg[self.E_twin[edge0, 0]]) - np.tan(arg_singular0) * np.cos(self.Corner_arg[self.E_twin[edge0, 0]]))
-                    A_Corner_scale[edge1, self.E_twin[edge1, 0]] = ((1-alpha)/alpha) * \
-                        (np.tan(arg_singular1) * np.cos(self.Corner_arg[self.E_twin[edge1, 0]]) - np.sin(self.Corner_arg[self.E_twin[edge1, 0]])) /\
-                            (np.sin(self.Corner_arg[self.E_twin[edge1, 1]]) - np.tan(arg_singular1) * np.cos(self.Corner_arg[self.E_twin[edge1, 1]]))
+                    A_Corner_scale[edge0, self.E_twin[edge0, 1]] = -10 * ((1-alpha)/alpha) * \
+                        (np.tan(phase_singular0) * np.cos(self.Corner_phase[self.E_twin[edge0, 1]]) - np.sin(self.Corner_phase[self.E_twin[edge0, 1]])) /\
+                            (np.sin(self.Corner_phase[self.E_twin[edge0, 0]]) - np.tan(phase_singular0) * np.cos(self.Corner_phase[self.E_twin[edge0, 0]]))
+                    A_Corner_scale[edge0, self.E_twin[edge0, 0]] = 10
+                    
+                    A_Corner_scale[edge1, self.E_twin[edge1, 0]] = 10 * ((1-alpha)/alpha) * \
+                        (np.tan(phase_singular1) * np.cos(self.Corner_phase[self.E_twin[edge1, 0]]) - np.sin(self.Corner_phase[self.E_twin[edge1, 0]])) /\
+                            (np.sin(self.Corner_phase[self.E_twin[edge1, 1]]) - np.tan(phase_singular1) * np.cos(self.Corner_phase[self.E_twin[edge1, 1]]))
+                    A_Corner_scale[edge1, self.E_twin[edge1, 1]] = -10
                                                            
                 self.V_singular_e += [singularity, singularity]
-                z0 = np.exp(1j * arg_singular0)
-                z1 = np.exp(1j * arg_singular1)
+                z0 = np.exp(1j * phase_singular0)
+                z1 = np.exp(1j * phase_singular1)
                 vec0 = np.real(z0) * self.B1[face0] + np.imag(z0) * self.B2[face0]
                 vec1 = np.real(z1) * self.B1[face1] + np.imag(z1) * self.B2[face1]
                 self.Vec_singular_e += [vec0, vec1]
                 
-                rank_U += 2
+                rank_U += 4
                 
         if len(self.F_f_singular) > 0:
-            A_Corner_scale[-1, np.where(self.mask_removed_v)[0][0]] = 1
             if np.where(self.mask_removed_v)[0][0] != 0:
                 rank_U += 1
+                A_Corner_scale[-1, 0] = 0
+                A_Corner_scale[-1, np.where(self.mask_removed_v)[0][0]] = 1
+                
+            # self.Corner_scale = lsqr(A_Corner_scale, np.append(np.zeros(len(self.E_extended)), 1))[0]
             
             delta_A = A_Corner_scale - self.A_Corner_scale
             U, V = compute_uv(delta_A)
@@ -853,6 +894,35 @@ class Triangle_mesh():
         else:
             self.Corner_scale = self.Corner_scale_harmonic.copy()
         self.Corner_scale_pre = self.Corner_scale.copy()
+
+        # z_singular = complex_projection(
+        #     self.B1[f_test][None, :],
+        #     self.B2[f_test][None, :],
+        #     self.normals[f_test][None, :],
+        #     (singularity - self.V_extended[v0])[None, :]
+        # )[0]
+        
+        # z0, z1, z2 = complex_projection(
+        #     self.B1[f_test][None, :],
+        #     self.B2[f_test][None, :],
+        #     self.normals[f_test][None, :],
+        #     self.V_extended[self.F_f[f_test]] - self.V_extended[v0]
+        # )[0]
+        
+        # f0_prescribed = x0[v0] + 0j
+        # f1_prescribed = x0[v1] * np.exp(1j * theta_01)
+        # f2_prescribed = x0[v2] * np.exp(1j * theta_02)
+        
+        # f0 = self.Corner_scale[v0] * np.exp(1j * self.Corner_phase[v0])
+        # f1 = self.Corner_scale[v1] * np.exp(1j * self.Corner_phase[v1])
+        # f2 = self.Corner_scale[v2] * np.exp(1j * self.Corner_phase[v2])
+        
+        # z_singular_reconstructed = reconstruct_singularity(z0, z1, z2, f0, f1, f2)
+        
+        # print(np.abs(f0_prescribed)/np.abs(f1_prescribed), np.abs(f0)/np.abs(f1))
+        # print(np.abs(f0_prescribed)/np.abs(f2_prescribed), np.abs(f0)/np.abs(f2))
+        # print(np.abs(f1_prescribed)/np.abs(f2_prescribed), np.abs(f1)/np.abs(f2))
+        # print(z_singular, z_singular_reconstructed)
         
     def reconstruct_linear_from_Corners(self):
         '''
@@ -861,7 +931,7 @@ class Triangle_mesh():
                 self.Us: (num_F) complex array of Corner values
                 singularities_f: (num_singularities, 3) array of singularities in the faces
         '''
-        self.U = self.Corner_scale * np.exp(1j * self.Corner_arg)
+        self.U = self.Corner_scale * np.exp(1j * self.Corner_phase)
         b_Coeff = np.zeros(len(self.F_f) * 6, dtype=float)
 
         for i, f in tqdm(enumerate(self.F_f),
@@ -899,8 +969,6 @@ class Triangle_mesh():
         small_f = (np.linalg.norm(self.V[self.F[:, 0]] - self.V[self.F[:, 1]], axis=1) < (interval * 2)) & \
             (np.linalg.norm(self.V[self.F[:, 1]] - self.V[self.F[:, 2]], axis=1) < (interval * 2)) & \
                 (np.linalg.norm(self.V[self.F[:, 2]] - self.V[self.F[:, 0]], axis=1) < (interval * 2))
-                
-        print(len(self.F), np.sum(small_f))
 
         self.points_sample += np.mean(self.V[self.F[small_f]], axis=1).tolist() 
         self.F_sample += np.where(small_f)[0].tolist()
@@ -1012,7 +1080,7 @@ class Triangle_mesh():
         
     def sample_field(self):
         vectors_complex = self.Coeff[self.F_sample, 0] * self.Z_sample +\
-            self.Coeff[self.F_sample, 1] * np.conjugate(self.Z_sample) +\
+            self.Coeff[self.F_sample, 1] * np.conj(self.Z_sample) +\
                 self.Coeff[self.F_sample, 2]
 
         self.vectors = vectors_complex.real[:, None] * self.B1[self.F_sample] +\
@@ -1023,7 +1091,7 @@ class Triangle_mesh():
         self.sample_prep()
         self.process_singularities(singularities, indices)
         self.compute_thetas()
-        self.reconstruct_Corner_arg()
+        self.reconstruct_Corner_phase()
         # self.reconstruct_Corner_scale()
         self.Corner_scale = 1
         coeffs = self.reconstruct_linear_from_Corners()
@@ -1052,7 +1120,7 @@ class Triangle_mesh():
         
         list_reconstruction = [
             self.compute_thetas, 
-            self.reconstruct_Corner_arg,
+            self.reconstruct_Corner_phase,
             self.reconstruct_Corner_scale,
             self.reconstruct_linear_from_Corners,
             self.sample_field
@@ -1082,7 +1150,7 @@ class Triangle_mesh():
             
             for f in self.F_f_singular:
                 coeff = self.Coeff[f]
-                singularity = (coeff[1] * np.conjugate(coeff[2]) - coeff[2] * np.conjugate(coeff[0])) /\
+                singularity = (coeff[1] * np.conj(coeff[2]) - coeff[2] * np.conj(coeff[0])) /\
                     (np.abs(coeff[0])**2 - np.abs(coeff[1])**2)
                     
                 corners += self.V_extended[self.F_f[f]].tolist()
@@ -1175,7 +1243,7 @@ class Triangle_mesh():
                     
                 #     for i, f in enumerate(self.F_f_singular):
                 #         coeff = self.Coeff[f]
-                #         singularity = (coeff[1] * np.conjugate(coeff[2]) - coeff[2] * np.conjugate(coeff[0])) /\
+                #         singularity = (coeff[1] * np.conj(coeff[2]) - coeff[2] * np.conj(coeff[0])) /\
                 #             (np.abs(coeff[0])**2 - np.abs(coeff[1])**2)
                     
                 #         corners += self.V_extended[self.F_f[f]].tolist()
@@ -1267,7 +1335,7 @@ class Triangle_mesh():
             
             list_reconstruction = [
                 self.compute_thetas, 
-                self.reconstruct_Corner_arg,
+                self.reconstruct_Corner_phase,
                 self.reconstruct_Corner_scale,
                 self.reconstruct_linear_from_Corners,
                 self.sample_field

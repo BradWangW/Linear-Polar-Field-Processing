@@ -5,7 +5,8 @@ import os
 
 if __name__ == '__main__':
     
-    V, F = load_off_file(os.path.join('..', 'data_patho', 'fertility.off'))
+    V, F = load_off_file(os.path.join('..', 'data_patho', 'dragon.off'))
+    print(len(F))
     
     mesh = Triangle_mesh(V, F)
 
