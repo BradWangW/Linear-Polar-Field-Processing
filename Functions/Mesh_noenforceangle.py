@@ -13,6 +13,7 @@ import random
 import polyscope as ps
 import polyscope.imgui as psim
 import time
+import math
 
 
 class Triangle_mesh():
@@ -31,6 +32,8 @@ class Triangle_mesh():
         self.genus = (2 - (V.shape[0] - self.E.shape[0] + F.shape[0])) / 2
         
         self.B1, self.B2, self.normals = compute_planes(V, F)
+        
+        self.Area = np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]], axis=1))
         
         print('Genus of the mesh:', self.genus)
         
@@ -108,6 +111,10 @@ class Triangle_mesh():
         return cycles
         
     def get_V_F_f_E_twin(self):
+        # metric M_G_ff
+        d_G = lil_matrix((len(self.F), len(self.E) * 4), dtype=complex)
+        Area_inv = lil_matrix((len(self.F), len(self.F)), dtype=float)
+        
         # Construct face-faces and twin edges
         # Loop over original faces
         for i, f in tqdm(enumerate(self.F), 
@@ -136,13 +143,30 @@ class Triangle_mesh():
                 self.d1[i, i * 3 + j] = 1
                 
                 self.E_twin_dict[tuple([f_f[j], f_f[k]])] = i * 3 + j
+                
+            vec0 = self.V[f[1]] - self.V[f[0]]
+            vec1 = self.V[f[2]] - self.V[f[1]]
+            vec2 = self.V[f[0]] - self.V[f[2]]
+            
+            z0, z1, z2 = complex_projection(self.B1[i][None, :], self.B2[i][None, :], self.normals[i][None, :], 
+                                            [vec0, vec1, vec2]).squeeze()
+            
+            d_G[i, i * 3] = (z1 + z2)/2
+            d_G[i, i * 3 + 1] = (z2 + z0)/2
+            d_G[i, i * 3 + 2] = (z0 + z1)/2
+            
+            Area_inv[i, i] = 1/np.linalg.norm(np.cross(vec0, vec1))
             
         self.V_extended = np.array(self.V_extended)
+        
+        self.d_G_complete[:len(self.F), :] = d_G.real
+        self.Area_inv[:len(self.F), :len(self.F)] = Area_inv
+        self.M_G_ff = d_G.real.T @ Area_inv @ d_G.real
     
     def get_F_e_E_comb(self):
-        # metric M_G
+        # metric M_G_fe
         d_G = lil_matrix((len(self.E), len(self.E) * 4), dtype=complex)
-        Area_inv = lil_matrix((len(self.E), len(self.E)), dtype=complex)
+        Area_inv = lil_matrix((len(self.E), len(self.E)), dtype=float)
         
         # Construct edge-faces
         for i, e in tqdm(enumerate(self.E), 
@@ -207,7 +231,9 @@ class Triangle_mesh():
                 z_ij, z_jk, z_ik, z_kl, z_li = complex_projection(self.B1[f], self.B2[f], self.normals[f],
                                     [vec_ij, vec_jk, vec_ik, vec_kl, vec_li]).squeeze()
                 
-                Area_inv[i, i] = 2/(np.linalg.norm(np.cross(vec_ij, vec_jk)) + np.linalg.norm(np.cross(vec_kl, vec_li)))
+                area_sum = np.linalg.norm(np.cross(vec_ij, vec_jk)) + np.linalg.norm(np.cross(vec_kl, vec_li))
+                
+                Area_inv[i, i] = 2/area_sum
                 
                 d_G[i, e_i_j] = - (z_ik + z_jk)/2
                 d_G[i, e_j_k] = (z_ij + z_ik)/2
@@ -217,6 +243,11 @@ class Triangle_mesh():
                 d_G[i, e_ig_kg] = (z_li - z_kl)/2
                 d_G[i, e_if_ig] = z_ik * np.exp(-1j * np.pi/2)
                 d_G[i, e_kg_kf] = z_ik * np.exp(1j * np.pi/2)
+                
+                self.area_weights[e_kf_if] = 1/np.abs(z_ik)
+                self.area_weights[e_ig_kg] = 1/np.abs(z_ik)
+                self.area_weights[e_if_ig] = 6/area_sum
+                self.area_weights[e_kg_kf] = 6/area_sum
                 
                 self.d1[len(self.F_f) + i, len(self.E_twin) + len(self.E_comb) - 2] = 1
                 self.d1[len(self.F_f) + i, len(self.E_twin) + len(self.E_comb) - 1] = 1
@@ -246,11 +277,18 @@ class Triangle_mesh():
                 raise ValueError(f'Wrong number of twin edges found: {e_twin}.')
         
         self.E_extended = np.concatenate([self.E_twin, self.E_comb])
-        M_G_complex = d_G.real.T @ Area_inv @ d_G.real
-        self.M_G = bmat([
-            [M_G_complex.real, -M_G_complex.imag],
-            [M_G_complex.imag, M_G_complex.real]
-        ], format='csc')
+
+        # This is by now computing the metric using integral over the edge-faces 
+        # Next try integral over all face-faces.
+        self.d_G_complete[len(self.F):, :] = d_G.real
+        self.Area_inv[len(self.F):, len(self.F):] = Area_inv
+        self.M_G_fe = d_G.real.T @ Area_inv @ d_G.real
+        
+        def normalise(a):
+            return a/np.max(a) 
+        
+        self.area_weights[:len(self.E_twin)] = normalise(self.area_weights[:len(self.E_twin)]) 
+        self.area_weights[len(self.E_twin):] = normalise(self.area_weights[len(self.E_twin):]) * self.ratio_twin_to_comb
 
     def get_F_v(self):
         # Construct vertex-faces and combinatorial edges
@@ -306,17 +344,31 @@ class Triangle_mesh():
             np.zeros(len(self.F_f) + len(self.F_e)),
             self.G_V
         ])
+        M_G_complete = self.d_G_complete.T @ self.Area_inv @ self.d_G_complete
         
-        d1_zero_imag = bmat([
-            [self.d1, None],
-            [None, eye(len(self.E_extended))]
+        self.A_Theta_KKT_areaweights = bmat([
+            [diags(self.area_weights), self.d1.T],
+            [self.d1, None]
         ], format='csc')
+        self.lu_Theta_KKT_areaweights = splu(self.A_Theta_KKT_areaweights + 1e-8 * eye(self.A_Theta_KKT_areaweights.shape[0], format='csc'))
         
         self.A_Theta_KKT = bmat([
-            [self.M_G.tocsr(), d1_zero_imag.T],
-            [d1_zero_imag, None]
+            [M_G_complete, self.d1.T],
+            [self.d1, None]
         ], format='csc')
-        self.M_Theta_KKT = splu(self.A_Theta_KKT + 1e-8 * eye(self.A_Theta_KKT.shape[0], format='csc'))
+        self.lu_Theta_KKT = splu(self.A_Theta_KKT + 1e-8 * eye(self.A_Theta_KKT.shape[0], format='csc'))
+        
+        self.A_Theta_KKT_ff = bmat([
+            [self.M_G_ff, self.d1.T],
+            [self.d1, None]
+        ], format='csc')
+        self.lu_Theta_KKT_ff = splu(self.A_Theta_KKT_ff + 1e-8 * eye(self.A_Theta_KKT_ff.shape[0], format='csc'))
+        
+        self.A_Theta_KKT_fe = bmat([
+            [self.M_G_fe, self.d1.T],
+            [self.d1, None]
+        ], format='csc')
+        self.M_Theta_KKT_fe = splu(self.A_Theta_KKT_fe + 1e-8 * eye(self.A_Theta_KKT_fe.shape[0], format='csc'))
         
         Q = eye(len(self.E_extended), format='lil')
         self.A_Theta_KKT_identity_metric = bmat([
@@ -325,7 +377,7 @@ class Triangle_mesh():
         ], format='csc')
         self.M_Theta_KKT_identity_metric = splu(self.A_Theta_KKT_identity_metric + 1e-8 * eye(self.A_Theta_KKT_identity_metric.shape[0], format='csc'))
         
-        Q = eye(len(self.E_extended), format='lil') * 5
+        Q = eye(len(self.E_extended), format='lil') * 10
         Q[np.arange(len(self.E_twin)), np.arange(len(self.E_twin))] = 1
         self.A_Theta_KKT_punishing_comb = bmat([
             [Q, self.d1.T],
@@ -368,7 +420,7 @@ class Triangle_mesh():
         
         self.M_Coeff = splu(A_Coeff.tocsc())
     
-    def construct_extended_mesh(self):
+    def construct_extended_mesh(self, ratio_twin_to_comb=1):
         '''
         Construct the extended mesh from the input mesh, which consists of 
             the extended vertices, twin edges and combinatorial edges,
@@ -386,11 +438,15 @@ class Triangle_mesh():
         self.pair_rotations = []
         self.V_map = {v:[] for v in range(self.V.shape[0])}
         self.E_twin_dict = {}
+        self.d_G_complete = lil_matrix((len(self.F) + len(self.E), len(self.E) * 4), dtype=float)
+        self.Area_inv = lil_matrix((len(self.F) + len(self.E), len(self.F) + len(self.E)), dtype=float)
+        
+        self.area_weights = np.zeros(len(self.E) * 4)
+        self.ratio_twin_to_comb = ratio_twin_to_comb
         
         for step in tqdm([self.get_V_F_f_E_twin, 
                           self.get_F_e_E_comb, 
                           self.get_F_v, 
-                        #   self.construct_M_G,
                           self.get_preconds], 
                          desc='Constructing the extended mesh',
                          leave=True):
@@ -400,16 +456,14 @@ class Triangle_mesh():
         self.Corner_arg_pre = np.zeros(len(self.V_extended))        
         self.Corner_scale_pre = np.zeros(len(self.V_extended))
         
-        self.Corner_arg_harmonic = self.lu_Corner_scale_augmented.solve(
-            np.zeros(len(self.E_extended) + len(self.V_extended) + 1)
-        )
+        self.Corner_arg_pre = None
         self.Corner_scale_harmonic = self.lu_Corner_scale_augmented.solve(
             np.concatenate([
                 np.append(np.zeros(len(self.E_extended), dtype=float), 1), 
                 np.zeros(len(self.V_extended), dtype=float)
             ])
         )[len(self.E_extended) + 1:]
-        self.metric = 'G'
+        self.metric = 'fe'
         self.metric_pre = None
         
     def process_singularities(self, singularities=None, indices=None):
@@ -444,7 +498,13 @@ class Triangle_mesh():
             parallel = np.isclose(
                 np.abs(dot), np.linalg.norm(vec1, axis=1) * np.linalg.norm(vec2, axis=1)
             )
-            in_F_e = np.where(parallel * obtuse)[0]
+            edge_vec = self.V_extended[self.F_e[:, 1]] - self.V_extended[self.F_e[:, 0]]  # Edge vector
+            sing_to_start = singularity[None, :] - self.V_extended[self.F_e[:, 0]]       # Vector to start point
+            t = np.einsum('ij,ij->i', sing_to_start, edge_vec) / np.einsum('ij,ij->i', edge_vec, edge_vec)  # Projection parameter
+            on_segment = (t >= 0) & (t <= 1)                                             # Check if within segment bounds
+
+            # Combine with existing conditions
+            in_F_e = np.where(parallel & obtuse & on_segment)[0]
             
             # Check if the singularity is in a face
             in_F_f = is_in_face(self.V_extended, self.F_f, singularity)
@@ -456,17 +516,18 @@ class Triangle_mesh():
                 self.F_extended_singular[i] = len(self.F_f) + len(self.F_e) + in_F_v[0]
                     
             # If the singularity is in an edge, it gives the thetas for the incident faces
-            elif len(in_F_e) == 1:
+            elif len(in_F_e) >= 1:
+                
                 self.F_extended_singular[i] = len(self.F_f) + in_F_e[0]
                 
                 self.I_F[self.F_extended_singular[i]] = -1 * self.indices[i]
                 
                 self.E_singular[i] = np.where(
-                    np.sum(np.isin(self.E_twin, self.F_e[in_F_e]), axis=1) == 2
+                    np.sum(np.isin(self.E_twin, self.F_e[in_F_e[0]]), axis=1) == 2
                 )[0]
                 
                 fs = np.where(
-                    np.sum(np.isin(self.F_f, self.F_e[in_F_e]), axis=1) == 2
+                    np.sum(np.isin(self.F_f, self.F_e[in_F_e[0]]), axis=1) == 2
                 )[0]
                 
                 self.F_f_singular += fs.tolist()
@@ -482,6 +543,10 @@ class Triangle_mesh():
                 self.F_f_singular += [in_F_f]
                     
             else:
+                print(in_F_e)
+                print(self.E[in_F_e])
+                print(self.V[self.E[in_F_e]])
+                print(len(in_F_v), len(in_F_e), in_F_f)
                 raise ValueError(f'The singularity {singularity} is not in any face, edge or vertex.')
             
     def compute_thetas(self):
@@ -491,17 +556,26 @@ class Triangle_mesh():
         '''
         if self.metric_pre != self.metric or np.any(self.I_F != self.I_F_pre) or np.all(self.I_F == 0):
             # Solve the quadratic programming problem
-            if self.metric == 'G':
-                # print(self.A_Theta_KKT.shape, len(self.E_extended) + len(self.F_e))
-                solution = self.M_Theta_KKT.solve(np.concatenate([
-                    np.zeros(len(self.E_extended) * 2),
-                    2 * np.pi * self.I_F - self.G_F, 
-                    np.zeros(len(self.E_extended))
+            if self.metric == 'area weights':
+                solution = self.lu_Theta_KKT_areaweights.solve(np.concatenate([
+                    np.zeros(len(self.E_extended)),
+                    2 * np.pi * self.I_F - self.G_F
                 ]))
-                # solution = self.M_Theta_KKT.solve(np.concatenate([
-                #     np.zeros(len(self.E_extended)),
-                #     2 * np.pi * self.I_F - self.G_F
-                # ]))
+            elif self.metric == 'CI':
+                solution = self.lu_Theta_KKT.solve(np.concatenate([
+                    np.zeros(len(self.E_extended)),
+                    2 * np.pi * self.I_F - self.G_F
+                ]))
+            elif self.metric == 'ff':
+                solution = self.lu_Theta_KKT_ff.solve(np.concatenate([
+                    np.zeros(len(self.E_extended)),
+                    2 * np.pi * self.I_F - self.G_F
+                ]))
+            elif self.metric == 'fe':
+                solution = self.M_Theta_KKT_fe.solve(np.concatenate([
+                    np.zeros(len(self.E_extended)),
+                    2 * np.pi * self.I_F - self.G_F
+                ]))
             elif self.metric == 'identity':
                 solution = self.M_Theta_KKT_identity_metric.solve(np.concatenate([
                     np.zeros(len(self.E_extended)), 
@@ -525,16 +599,63 @@ class Triangle_mesh():
             self.A_Corner_arg[np.arange(len(self.E_extended)), self.E_extended[:, 0]] = np.exp(1j * Theta)
             self.A_Corner_arg[np.arange(len(self.E_extended)), self.E_extended[:, 1]] = -1
             self.A_Corner_arg[-1, np.where(self.mask_removed_v)[0][0]] = 1
+
+            M_inv = 1 / (self.A_Corner_arg.T @ self.A_Corner_arg).diagonal()
+            self.M_Corner_arg = LinearOperator((self.A_Corner_arg.shape[1], self.A_Corner_arg.shape[1]), matvec=lambda x: M_inv * x)
             
-    def reconstruct_Corner_arg(self, z_init=1000):
+    def reconstruct_Corner_arg(self, z_init=1):
+        def gradient_descent(A, b, x0, learning_rate=0.01, tol=1e-3, max_iter=100):
+            """
+            Gradient Descent to solve A^T A x = A^T b.
+            A: Input matrix.
+            b: Right-hand side vector.
+            x0: Initial guess for the solution.
+            learning_rate: Step size for gradient descent.
+            tol: Tolerance for convergence.
+            max_iter: Maximum number of iterations.
+            """
+            x = x0
+            AtA = A.T @ A
+            Atb = A.T @ b
+            loss = 999999
+            loss_pre = 999999
+            descending = 0
+            
+            for k in range(max_iter):
+                loss = np.linalg.norm(A @ x - b)
+                gradient = AtA @ x - Atb
+                x_new = x - learning_rate * gradient
+                
+                if loss > loss_pre:
+                    descending += 1
+
+                # Check for convergence
+                if np.linalg.norm(x_new - x) < tol:
+                    print(f"Converged in {k} iterations.")
+                    return x_new
+
+                x = x_new
+                loss_pre = loss
+
+            print("Warning: Gradient Descent did not converge.")
+            print(f"Loss decreased {descending} times.")
+            return x
+        
         if self.metric_pre != self.metric or np.any(self.I_F != self.I_F_pre) or np.all(self.I_F == 0):
-            b_Corner_arg = np.zeros(len(self.E_extended) + 1, dtype=complex)
-            b_Corner_arg[-1] = z_init
+            b = np.append(np.zeros(len(self.E_extended), dtype=float), z_init)
             
-            self.Corner_arg = np.angle(lsqr(self.A_Corner_arg, b_Corner_arg, x0=self.Corner_arg_pre)[0])
-            # self.Corner_arg = np.angle(self.lu_Corner_scale_augmented.solve(
-            #     np.concatenate([b_Corner_arg, np.zeros(len(self.V_extended), dtype=complex)])
-            # )[len(self.E_extended) + 1:])
+            self.Corner_arg = np.angle(lsqr(
+                self.A_Corner_arg, b, x0=self.Corner_arg_pre, atol=1e-3, btol=1e-3
+                )[0])
+            # if self.Corner_arg_pre is None:
+            #     self.Corner_arg = np.angle(lsqr(
+            #         self.A_Corner_arg, b
+            #         )[0])
+            # else:
+            #     self.Corner_arg = np.angle(
+            #         gradient_descent(self.A_Corner_arg, b,
+            #                          x0=self.Corner_arg_pre)
+            #     )
             
             self.Corner_arg_pre = np.exp(1j * self.Corner_arg)
             
@@ -595,13 +716,6 @@ class Triangle_mesh():
             edge20 = np.where(
                 np.all(np.isin(self.E_twin, [v2,v0]), axis=1)
             )[0][0]
-            
-            z0 = complex_projection(
-                self.B1[f][None, :],
-                self.B2[f][None, :],
-                self.normals[f][None, :],
-                (self.V_extended[v0] - singularity)[None, :]
-            )[0]
             
             z0, z1, z2 = complex_projection(
                 self.B1[f][None, :],
@@ -736,11 +850,6 @@ class Triangle_mesh():
             # Compute updated solution
             self.Corner_scale = self.Corner_scale_harmonic - U_inv @ correction
         
-            # b_Corner_scale = np.zeros(len(self.E_extended) + 1)
-            # b_Corner_scale[-1] = 1
-            
-            # self.Corner_scale = lsqr(A_Corner_scale, b_Corner_scale, x0=x0)[0]
-        
         else:
             self.Corner_scale = self.Corner_scale_harmonic.copy()
         self.Corner_scale_pre = self.Corner_scale.copy()
@@ -770,7 +879,104 @@ class Triangle_mesh():
         self.Coeff[:, 1] = solution[2::6] + 1j * solution[3::6]
         self.Coeff[:, 2] = solution[4::6] + 1j * solution[5::6]
 
-    def sample_prep(self, num_samples=7, margin = 0.01):
+    def sample_prep_adaptive(self, interval_r=1):
+        """
+        Fill the surface of a given mesh with a specified density of points.
+        
+        Parameters:
+            V (np.ndarray): Vertices of the mesh (N, 3).
+            F (np.ndarray): Faces of the mesh (M, 3), with each face represented by indices into V.
+            density (float): The number of points per unit area of the mesh.
+
+        Returns:
+            np.ndarray: An (N, 3) array of filled points on the surface.
+        """
+        self.points_sample = []
+        self.F_sample = []
+        
+        interval = interval_r * np.mean(np.linalg.norm(self.V[self.E[:, 0]] - self.V[self.E[:, 1]], axis=1))
+
+        small_f = (np.linalg.norm(self.V[self.F[:, 0]] - self.V[self.F[:, 1]], axis=1) < (interval * 2)) & \
+            (np.linalg.norm(self.V[self.F[:, 1]] - self.V[self.F[:, 2]], axis=1) < (interval * 2)) & \
+                (np.linalg.norm(self.V[self.F[:, 2]] - self.V[self.F[:, 0]], axis=1) < (interval * 2))
+                
+        print(len(self.F), np.sum(small_f))
+
+        self.points_sample += np.mean(self.V[self.F[small_f]], axis=1).tolist() 
+        self.F_sample += np.where(small_f)[0].tolist()
+
+        for f in tqdm(np.where(~small_f)[0], desc='Sampling points for field processing', 
+                      total=np.sum(~small_f), leave=False):
+            
+            # Get the vertices of the face
+            v0, v1, v2 = self.F[f]
+            
+            lens = np.linalg.norm(
+                self.V[self.F[f]] - np.roll(self.V[self.F[f]], -1, axis=0), axis=1
+            )
+            
+            if np.sum(lens >= interval * 2) == 1:
+                if np.argmax(lens) == 0:
+                    vs = [v0, v1]
+                elif np.argmax(lens) == 1:
+                    vs = [v1, v2]
+                else:
+                    vs = [v2, v0]
+                    
+                self.points_sample.append(np.mean(self.V[self.F[f]], axis=0))
+                
+                self.points_sample.append((1/3) * self.points_sample[-1] + (2/3) * self.V[vs[0]])
+                self.points_sample.append((1/3) * self.points_sample[-2] + (2/3) * self.V[vs[1]])
+                
+                self.F_sample += [f, f, f]
+                
+            elif np.sum(lens >= interval * 2) == 2:
+                if np.argmin(lens) == 0:
+                    v_far = v2
+                    vs = [v0, v1]
+                elif np.argmin(lens) == 1:
+                    v_far = v0
+                    vs = [v1, v2]
+                else:
+                    v_far = v1
+                    vs = [v2, v0]
+                
+                num_points = math.ceil(((np.linalg.norm(self.V[v_far] - self.V[vs[0]]) + np.linalg.norm(self.V[v_far] - self.V[vs[1]])) / 2) // interval)
+                us = np.linspace(1/(2 * num_points), 1-1/(2 * num_points), num_points)
+                
+                for u in us:
+                    self.points_sample.append(u * self.V[v_far] + (1-u)/2 * self.V[vs[0]] + (1-u)/2 * self.V[vs[1]])
+                    self.F_sample.append(f)
+                    
+            else:
+                num_points = math.ceil(np.max(lens) // interval)
+                margin = 1/(2 * num_points)
+        
+                for i in range(num_points):
+                    for j in range(num_points - i):
+                        # Barycentric coordinates
+                        u = margin + (i / (num_points-1)) * (1 - 3 * margin)
+                        v = margin + (j / (num_points-1)) * (1 - 3 * margin)
+                        w = 1 - u - v
+                        
+                        # Interpolate to get the 3D point in the face
+                        self.points_sample.append(
+                            u * self.V[v0] + \
+                                v * self.V[v1] + \
+                                    w * self.V[v2]
+                        )
+                        self.F_sample.append(f)
+
+        self.points_sample = np.array(self.points_sample)
+        self.F_sample = np.array(self.F_sample, dtype=int)
+        
+        self.Z_sample = complex_projection(
+            self.B1[self.F_sample], self.B2[self.F_sample], self.normals[self.F_sample],
+            self.points_sample - self.V_extended[self.F_f[self.F_sample, 0]], 
+            diagonal=True
+        )
+
+    def sample_prep(self, num_samples=3, margin = 0.1):
         
         self.points_sample = []
         self.F_sample = []
@@ -837,9 +1043,9 @@ class Triangle_mesh():
         
         ps.show()
     
-    def dynamic_field(self, F_singular, indices):
-        self.construct_extended_mesh()
-        self.sample_prep()
+    def dynamic_field(self, F_singular, indices, sample_interval=1, ratio_twin_to_comb=1):
+        self.construct_extended_mesh(ratio_twin_to_comb=ratio_twin_to_comb)
+        self.sample_prep_adaptive(interval_r=sample_interval)
         singularities = np.mean(self.V[self.F[F_singular]], axis=1)
         
         self.process_singularities(singularities, indices)
@@ -905,15 +1111,24 @@ class Triangle_mesh():
                                                             np.array(corner_vectors),
                                                             enabled=False)
             
-        self.metric = 'G'
+        self.metric = 'fe'
         self.bary_coors = np.ones((len(F_singular), 2)) * (1/3)
         
         def callback():
             
             changed = False
             
-            if psim.RadioButton("Discrete integral metric", self.metric == 'G'):
-                self.metric = 'G'
+            if psim.RadioButton("Area weights", self.metric == 'area weights'):
+                self.metric = 'area weights'
+                changed = True
+            if psim.RadioButton("Complete integral metric", self.metric == 'CI'):
+                self.metric = 'CI'
+                changed = True
+            if psim.RadioButton("Face-face integral metric", self.metric == 'ff'):
+                self.metric = 'ff'
+                changed = True
+            if psim.RadioButton("Edge-face integral metric", self.metric == 'fe'):
+                self.metric = 'fe'
                 changed = True
             if psim.RadioButton("Identity metric", self.metric == 'identity'):
                 self.metric = 'identity'
@@ -946,7 +1161,7 @@ class Triangle_mesh():
                 
                 print('')
                 
-                # self.vectors[np.any(self.vectors != 0, axis=1)] /= np.linalg.norm(self.vectors[np.any(self.vectors != 0, axis=1)], axis=1)[:, None]
+                self.vectors[np.any(self.vectors != 0, axis=1)] /= np.linalg.norm(self.vectors[np.any(self.vectors != 0, axis=1)], axis=1)[:, None]
                 
                 ps_field.remove_all_quantities()
                 ps_field.add_vector_quantity('Field', self.vectors,

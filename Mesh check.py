@@ -5,7 +5,7 @@ import os
 
 if __name__ == '__main__':
     
-    V, F = load_off_file(os.path.join('..', 'data', 'Kitten.off'))
+    V, F = load_off_file(os.path.join('..', 'data_patho', 'fertility.off'))
     
     mesh = Triangle_mesh(V, F)
 
@@ -14,7 +14,7 @@ if __name__ == '__main__':
     
     normal_field = ps.register_point_cloud("Normal field", 
                                            (mesh.V[F[:, 0]] + mesh.V[F[:, 1]] + mesh.V[F[:, 2]])/3, 
-                                           enabled=True, radius=0)
+                                           enabled=False, radius=0)
     normal_field.add_vector_quantity('Field', mesh.normals, enabled=True, length=0.01)
 
     ps.show()

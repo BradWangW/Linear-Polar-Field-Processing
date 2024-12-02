@@ -4,17 +4,17 @@ from matplotlib.widgets import Slider
 
 # Define the complex vector field function
 def f(z, r, t):
-    a = r * np.exp(1j * t)
-    b = 1 - a
+    a = r
+    b = (1-r) * np.exp(1j * t)
     return a * z + b * np.conj(z)
 
 # Generate the grid of points
-num_directions = 50  # Number of polar axes directions
-num_points = 5  # Number of points per axis
+num_directions = 30  # Number of polar axes directions
+num_points = 10 # Number of points per axis
 
 # Generate points in polar coordinates
 angles = np.linspace(0, 2 * np.pi, num_directions, endpoint=False)
-radii = np.linspace(0.3, 2, num_points)  # Avoiding the origin to prevent singularity
+radii = np.linspace(0.1, 2, num_points)  # Avoiding the origin to prevent singularity
 
 # Convert polar coordinates to Cartesian coordinates
 X = []
@@ -25,6 +25,12 @@ for angle in angles:
 
 X = np.array(X)
 Y = np.array(Y)
+
+# X = np.linspace(-2, 2, 15)
+# Y = np.linspace(-2, 2, 15)
+
+# X, Y = np.meshgrid(X, Y)
+
 Z = X + 1j * Y
 
 # Parameters
@@ -53,7 +59,7 @@ plt.subplots_adjust(left=0.1, bottom=0.25)
 ax_r = plt.axes([0.1, 0.1, 0.65, 0.03])
 ax_t = plt.axes([0.1, 0.05, 0.65, 0.03])
 
-slider_r = Slider(ax_r, 'r', 0.1, 5.0, valinit=r)
+slider_r = Slider(ax_r, 'r', 0, 1, valinit=r)
 slider_t = Slider(ax_t, 't', 0.0, 2 * np.pi, valinit=t)
 
 # Update function to be called when sliders are changed
