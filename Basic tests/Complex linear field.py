@@ -39,7 +39,7 @@ t = 0
 
 # Normalise the field
 F = f(Z, r, t)
-# F = F / np.abs(F)
+F = F / np.abs(F)
 
 # Calculate the initial vector field
 U = np.real(F)
@@ -59,7 +59,7 @@ plt.subplots_adjust(left=0.1, bottom=0.25)
 ax_r = plt.axes([0.1, 0.1, 0.65, 0.03])
 ax_t = plt.axes([0.1, 0.05, 0.65, 0.03])
 
-slider_r = Slider(ax_r, 'r', 0, 1, valinit=r)
+slider_r = Slider(ax_r, 'r', -1, 2, valinit=r)
 slider_t = Slider(ax_t, 't', 0.0, 2 * np.pi, valinit=t)
 
 # Update function to be called when sliders are changed

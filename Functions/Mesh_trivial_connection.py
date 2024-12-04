@@ -14,7 +14,41 @@ import polyscope as ps
 import polyscope.imgui as psim
 import time
 import math
+from collections import deque
 
+def propagate_values_bfs(G, start_vertex, initial_value, Connection):
+    # Initialize all node values to None
+    node_values = {node: None for node in G.nodes}
+    node_values[start_vertex] = initial_value  # Start with the initial complex value
+    
+    # Convert G.edges() to a list (so we can access them by index)
+    edges_list = list(G.edges())
+    
+    # BFS Queue
+    queue = deque([start_vertex])
+    
+    while queue:
+        node = queue.popleft()
+        
+        # Loop through neighbors, but now need to use the Connection array for edge weights
+        for neighbor in G.neighbors(node):
+            # Find the directed edge index (node -> neighbor)
+            if (node, neighbor) in edges_list:
+                edge_idx = edges_list.index((node, neighbor))
+                connection = Connection[edge_idx]  # Use connection for directed (node -> neighbor)
+            # Check for the reverse directed edge (neighbor -> node)
+            elif (neighbor, node) in edges_list:
+                edge_idx = edges_list.index((neighbor, node))
+                connection = - Connection[edge_idx]  # Use conjugate for reverse direction
+            else:
+                continue  # In case the edge isn't in the graph (shouldn't happen)
+
+            if node_values[neighbor] is None:  # Not visited
+                # Multiply by the complex edge weight from the Connection array
+                node_values[neighbor] = node_values[node] + connection
+                queue.append(neighbor)
+    
+    return node_values
 
 class Triangle_mesh():
     '''
@@ -38,59 +72,6 @@ class Triangle_mesh():
         print('Genus of the mesh:', self.genus)
         
         self.construct_mesh()
-
-    def get_homology_basis(self):
-        E_tuple = [tuple(e) for e in self.E]
-        E_dual = self.E_dual
-        
-        # Create a graph from the mesh edges
-        G = nx.Graph()
-        G.add_edges_from(E_tuple)
-        
-        T = nx.minimum_spanning_tree(G)
-        T_arr = np.array(T.edges())
-        
-        E_included = np.any((self.E[:, None] == T_arr).all(-1) | 
-                            (self.E[:, None] == T_arr[:, ::-1]).all(-1), axis=1)
-        E_dual_tuple = [tuple(e) for e in E_dual[~E_included]]
-        
-        # Construct the dual graph, where the edges 
-        # of the previous spanning tree are removed
-        G_dual = nx.Graph()
-        G_dual.add_edges_from(E_dual_tuple)
-        T_dual = nx.minimum_spanning_tree(G_dual)
-        T_dual_arr = np.array(T_dual.edges())
-        
-        E_dual_included = np.any((E_dual[:, None] == T_dual_arr).all(-1) | 
-                                 (E_dual[:, None] == T_dual_arr[:, ::-1]).all(-1), axis=1)
-        
-        E_either_included = E_included | E_dual_included
-        
-        E_co = self.E[~E_either_included]
-        
-        if len(E_co) != 2*self.genus:
-            raise ValueError(f"Expected {2*self.genus} non-contractible edges, but found {len(E_co)}")
-        
-        # List to store non-contractible cycles
-        cycles = []
-        G_H = []
-
-        for cotree_edge in tqdm(E_co, 
-                                desc="Finding non-contractible cycles", 
-                                total=len(E_co),
-                                leave=False):
-            # Add the cotree edge back to form a cycle
-            T.add_edge(*cotree_edge)
-            
-            cycle = nx.find_cycle(T, source=cotree_edge[0])
-            
-            # Find the cycle created by adding this edge
-            cycles.append(cycle)
-            
-            # Remove the edge again to restore the tree
-            T.remove_edge(*cotree_edge)
-
-        return cycles
     
     def construct_d0(self):
         '''
@@ -114,8 +95,6 @@ class Triangle_mesh():
                         desc='Computing edge quantities',
                         total=len(self.E),
                         leave=False):
-
-            vec_e = self.V[e[1]] - self.V[e[0]]
             
             fs = np.where(np.sum(np.isin(self.F, e), axis=1) == 2)[0]
             
@@ -124,6 +103,8 @@ class Triangle_mesh():
             B1, B2, normals = (self.B1[fs].squeeze(), 
                             self.B2[fs].squeeze(), 
                             self.normals[fs].squeeze())
+
+            vec_e = self.V[e[1]] - self.V[e[0]]
             
             Z_e = complex_projection(B1, B2, normals, vec_e[None, :])
             
@@ -131,9 +112,10 @@ class Triangle_mesh():
             edge_t = edge_t.real * self.B1[fs[0]] + edge_t.imag * self.B2[fs[0]]
             
             endpoint_edge_t = np.mean(self.V[e], axis=0) + edge_t
+            endpoint_edge_t_oppo = np.mean(self.V[e], axis=0) - edge_t
             
             if np.linalg.norm(endpoint_edge_t - np.mean(self.V[self.F[fs[0]]], axis=0)) >\
-                np.linalg.norm(np.mean(self.V[e], axis=0) - np.mean(self.V[self.F[fs[0]]], axis=0)):
+                np.linalg.norm(endpoint_edge_t_oppo - np.mean(self.V[self.F[fs[0]]], axis=0)):
                 f_r = fs[0]
                 f_l = fs[1]
                 z_e_r = Z_e[0]
@@ -146,43 +128,132 @@ class Triangle_mesh():
                 
             self.E_dual[i] = [f_r, f_l]
             
-            rotation = np.angle(z_e_l / z_e_r)
+            self.E_dual_dict[tuple(self.E_dual[i])] = i
+            
+            rotation = np.angle(z_e_l) - np.angle(z_e_r)
             
             self.rotations_across_e[i] = rotation
             
-            for f in fs:
-                if e in np.column_stack([self.F[f], np.roll(self.F[f], -1)]):
-                    self.d1[f, i] = 1
+    def get_homology_basis(self):
+        
+        # Create a graph from the mesh edges
+        G = nx.Graph()
+        G.add_edges_from(self.E)
+        
+        tree = nx.minimum_spanning_tree(G)
+        E_tree = np.array(tree.edges())
+        
+        E_included = np.any((self.E[:, None] == E_tree).all(-1) | 
+                            (self.E[:, None] == E_tree[:, ::-1]).all(-1), axis=1)
+        
+        E_dual_remained = self.E_dual[~E_included]
+        
+        # Construct the dual graph, where the edges 
+        # of the previous spanning tree are removed
+        G_dual = nx.Graph()
+        G_dual.add_edges_from(E_dual_remained)
+        tree_dual = nx.minimum_spanning_tree(G_dual)
+        E_tree_dual = np.array(tree_dual.edges())
+        
+        E_dual_included = np.any((self.E_dual[:, None] == E_tree_dual).all(-1) | 
+                                 (self.E_dual[:, None] == E_tree_dual[:, ::-1]).all(-1), axis=1)
+        
+        E_either_included = E_included | E_dual_included
+        
+        E_co = self.E_dual[~E_either_included]
+        
+        if len(E_co) != 2*self.genus:
+            raise ValueError(f"Expected {2*self.genus} non-contractible edges, but found {len(E_co)}")
+        
+        # List to store non-contractible cycles
+        cycles = []
+        self.H = lil_matrix((len(self.E), len(E_co)), dtype=int)
+        self.G_H = np.zeros(len(E_co))
+
+        for i, cotree_edge in tqdm(enumerate(E_co),
+                                desc="Finding non-contractible cycles", 
+                                total=len(E_co),
+                                leave=False):
+            # Add the cotree edge back to form a cycle
+            tree_dual.add_edge(*cotree_edge)
+            
+            cycle = nx.find_cycle(tree_dual, source=cotree_edge[0])
+            
+            # Find the cycle created by adding this edge
+            cycles.append(cycle)
+            
+            # Remove the edge again to restore the tree
+            tree_dual.remove_edge(*cotree_edge)
+            
+            for e in cycle:
+                if e in self.E_dual_dict:
+                    self.H[self.E_dual_dict[e], i] = 1
+                    self.G_H[i] += self.rotations_across_e[self.E_dual_dict[e]]
+                elif e[::-1] in self.E_dual_dict:
+                    self.H[self.E_dual_dict[e[::-1]], i] = -1
+                    self.G_H[i] -= self.rotations_across_e[self.E_dual_dict[e[::-1]]]
                 else:
-                    self.d1[f, i] = -1
+                    raise ValueError("Edge not found in the dictionary")
+            
+            self.G_H[i] = np.mod(self.G_H[i] + np.pi, 2 * np.pi) - np.pi
         
     def get_precond(self):
         self.A_Theta_KKT = bmat([
             [diags(self.cot_weights), self.d0],
             [self.d0.T, None]
         ], format='csc')
-        # self.A_Theta_KKT = bmat([
-        #     [eye(len(self.E), format='csc'), self.d0],
-        #     [self.d0.T, None]
-        # ], format='csc')
         self.lu_Theta_KKT = splu(self.A_Theta_KKT + 1e-8 * eye(self.A_Theta_KKT.shape[0], format='csc'))
         
+        self.A_Theta = vstack([
+            self.d0.T, self.H.T
+        ])
+        self.A_Theta_KKT_complete = bmat([
+            [diags(self.cot_weights), self.A_Theta.T], 
+            [self.A_Theta, None]
+        ], format='csc')
+        self.lu_Theta_KKT_complete = splu(self.A_Theta_KKT_complete + 1e-8 * eye(self.A_Theta_KKT_complete.shape[0], format='csc'))
+        
+        # Corner phase computation
+        G = nx.Graph()
+        G.add_edges_from(self.E_dual)
+        tree_dual = nx.minimum_spanning_tree(G)
+        E_tree = np.array(tree_dual.edges())
+        self.mask_E_tree = np.zeros(len(E_tree), dtype=int)
+        
+        for i, e_tree in enumerate(E_tree):
+            if tuple(e_tree) in self.E_dual_dict:
+                self.mask_E_tree[i] = self.E_dual_dict[tuple(e_tree)]
+            elif tuple(e_tree[::-1]) in self.E_dual_dict:
+                self.mask_E_tree[i] = self.E_dual_dict[tuple(e_tree[::-1])]
+            
+            E_tree[i] = self.E_dual[self.mask_E_tree[i]]
+        
+        self.A_phase = lil_matrix((len(E_tree) + 1, len(self.F)))
+        self.A_phase[np.arange(len(E_tree)), E_tree[:, 0]] = -1
+        self.A_phase[np.arange(len(E_tree)), E_tree[:, 1]] = 1
+        self.A_phase[-1, 0] = 1
+        
+        self.ATA_phase = self.A_phase.T @ self.A_phase
+        
+        self.lu_phase = splu(self.ATA_phase.tocsc() + 1e-8 * eye(self.ATA_phase.shape[0], format='csc'))
+
     def construct_mesh(self):
         
         self.d0 = lil_matrix((len(self.E), len(self.V)), dtype=float)
-        self.d1 = lil_matrix((len(self.F), len(self.E)), dtype=float)
         
         self.E_dual = np.zeros((len(self.E), 2))
+        self.E_dual_dict = {}
         self.rotations_across_e = np.zeros(len(self.E))
         self.cot_weights = np.zeros(len(self.E))
         
         for step in tqdm([self.construct_d0, 
                           self.get_edge_quantities,
+                          self.get_homology_basis, 
                           self.get_precond], 
                          desc='Constructing the mesh',
                          leave=True):
             step()
-            
+        
         self.field_pre = np.ones(len(self.F), dtype=complex)
         
     def process_singularities(self, singularities=None, indices=None):
@@ -193,41 +264,37 @@ class Triangle_mesh():
         self.indices = indices[np.array(indices) != 0]
         
         self.I_V = np.zeros(len(self.V))
+        self.V_singular = []
         
         for singularity, index in zip(self.singularities, self.indices):
             self.I_V[np.all(np.isclose(self.V, singularity[None, :]), axis=1)] = index
+            
+            self.V_singular.append(np.where(np.all(np.isclose(self.V, singularity[None, :]), axis=1))[0][0])
                
     def compute_field(self):
         '''
             Compute the set of thetas for each face singularity 
             by constrained optimisation using the KKT conditions.
         '''
-        solution = self.lu_Theta_KKT.solve(np.concatenate([
+        # solution = self.lu_Theta_KKT.solve(np.concatenate([
+        #     np.zeros(len(self.E)), 
+        #     2 * np.pi * self.I_V - self.G_V
+        # ]))
+        solution = self.lu_Theta_KKT_complete.solve(np.concatenate([
             np.zeros(len(self.E)), 
-            2 * np.pi * self.I_V - self.G_V
+            2 * np.pi * self.I_V - self.G_V, 
+            - self.G_H
         ]))
             
         Theta = solution[:len(self.E)]
         
-        self.Theta = Theta.copy()
-        
         Theta += self.rotations_across_e
         
-        self.A_field = lil_matrix((len(self.E) + 1, len(self.F)), dtype=complex)
-        self.A_field[np.arange(len(self.E)), self.E_dual[:, 0]] = np.exp(1j * Theta)
-        self.A_field[np.arange(len(self.E)), self.E_dual[:, 1]] = -1
-        self.A_field[-1, 0] = 1
+        self.phase = self.lu_phase.solve(
+            self.A_phase.T @ np.append(Theta[self.mask_E_tree], 0)
+        )
         
-        b = np.append(np.zeros(len(self.E), dtype=complex), 1)
-     
-        print(self.A_field.shape, b.shape, self.field_pre.shape)
-        self.field = lsqr(
-            self.A_field, b, x0=self.field_pre
-        )[0]
-        
-        self.field /= np.abs(self.field)
-        
-        self.field_pre = self.field.copy()
+        self.field = np.exp(1j * self.phase)
 
     def sample_prep_adaptive(self, interval_r=1):
         """
@@ -249,8 +316,6 @@ class Triangle_mesh():
         small_f = (np.linalg.norm(self.V[self.F[:, 0]] - self.V[self.F[:, 1]], axis=1) < (interval * 2)) & \
             (np.linalg.norm(self.V[self.F[:, 1]] - self.V[self.F[:, 2]], axis=1) < (interval * 2)) & \
                 (np.linalg.norm(self.V[self.F[:, 2]] - self.V[self.F[:, 0]], axis=1) < (interval * 2))
-                
-        print(len(self.F), np.sum(small_f))
 
         self.points_sample += np.mean(self.V[self.F[small_f]], axis=1).tolist() 
         self.F_sample += np.where(small_f)[0].tolist()
