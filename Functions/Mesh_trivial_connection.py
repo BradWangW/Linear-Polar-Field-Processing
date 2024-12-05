@@ -14,41 +14,6 @@ import polyscope as ps
 import polyscope.imgui as psim
 import time
 import math
-from collections import deque
-
-def propagate_values_bfs(G, start_vertex, initial_value, Connection):
-    # Initialize all node values to None
-    node_values = {node: None for node in G.nodes}
-    node_values[start_vertex] = initial_value  # Start with the initial complex value
-    
-    # Convert G.edges() to a list (so we can access them by index)
-    edges_list = list(G.edges())
-    
-    # BFS Queue
-    queue = deque([start_vertex])
-    
-    while queue:
-        node = queue.popleft()
-        
-        # Loop through neighbors, but now need to use the Connection array for edge weights
-        for neighbor in G.neighbors(node):
-            # Find the directed edge index (node -> neighbor)
-            if (node, neighbor) in edges_list:
-                edge_idx = edges_list.index((node, neighbor))
-                connection = Connection[edge_idx]  # Use connection for directed (node -> neighbor)
-            # Check for the reverse directed edge (neighbor -> node)
-            elif (neighbor, node) in edges_list:
-                edge_idx = edges_list.index((neighbor, node))
-                connection = - Connection[edge_idx]  # Use conjugate for reverse direction
-            else:
-                continue  # In case the edge isn't in the graph (shouldn't happen)
-
-            if node_values[neighbor] is None:  # Not visited
-                # Multiply by the complex edge weight from the Connection array
-                node_values[neighbor] = node_values[node] + connection
-                queue.append(neighbor)
-    
-    return node_values
 
 class Triangle_mesh():
     '''
@@ -160,19 +125,19 @@ class Triangle_mesh():
         
         E_either_included = E_included | E_dual_included
         
-        E_co = self.E_dual[~E_either_included]
+        E_co_dual = self.E_dual[~E_either_included]
         
-        if len(E_co) != 2*self.genus:
+        if len(E_co_dual) != 2*self.genus:
             raise ValueError(f"Expected {2*self.genus} non-contractible edges, but found {len(E_co)}")
         
         # List to store non-contractible cycles
         cycles = []
-        self.H = lil_matrix((len(self.E), len(E_co)), dtype=int)
-        self.G_H = np.zeros(len(E_co))
+        self.H = lil_matrix((len(self.E), len(E_co_dual)), dtype=int)
+        self.G_H = np.zeros(len(E_co_dual))
 
-        for i, cotree_edge in tqdm(enumerate(E_co),
+        for i, cotree_edge in tqdm(enumerate(E_co_dual),
                                 desc="Finding non-contractible cycles", 
-                                total=len(E_co),
+                                total=len(E_co_dual),
                                 leave=False):
             # Add the cotree edge back to form a cycle
             tree_dual.add_edge(*cotree_edge)
